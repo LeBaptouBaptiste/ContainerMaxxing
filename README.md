@@ -69,6 +69,31 @@ Le focus change tout seul, selon trois modes :
 | visite automatique | rien ne tourne | les étapes défilent toutes les 5 s (barre de progression sous le spotlight) |
 | sélection manuelle | clic sur un nœud, ◀ ▶ ou flèches du clavier | le focus est figé, puis le suivi auto reprend après 20 s |
 
+### Mode démo et présentateur
+
+Avec la source mock, une barre de démo apparaît au-dessus de la chaîne. Elle permet de **lancer une release
+qui illustre un contrôle de sécurité précis**, chacun bloquant à une étape différente (défense en profondeur) :
+
+| Touche | Scénario | Contrôle qui bloque | Où |
+|--------|----------|---------------------|----|
+| `1` | Release saine | aucun : la version arrive en prod | — |
+| `2` | CVE critique | Trivy (`--exit-code 1` sur HIGH/CRITICAL) | GitHub Actions |
+| `3` | Conteneur root | Dockle (`CIS-DI-0001`, `--exit-level warn`) | Image, avant même phobos |
+| `4` | Image non signée | `cosign verify` avant le déploiement | Container Apps |
+
+Dans les trois cas d'échec, la prod reste sur la version précédente.
+
+| Touche | Action |
+|--------|--------|
+| `P` | pause / lecture de la release (côté serveur : tous les écrans ouverts suivent) |
+| `Espace` | termine le step en cours, pour commenter chaque étape à son rythme |
+| `Maj` + `Espace` | revient sur un état précédent de la release (rejeu local, ne change rien côté serveur) |
+| `F` | mode présentation : chaîne en pleine largeur, texte agrandi, historique masqué |
+| `←` `→` | change l'étape mise en avant |
+
+Une release terminée n'est jamais relancée par `Espace` : un appui de trop ne doit pas effacer l'écran d'échec
+pendant qu'on l'explique. On lance la suivante volontairement avec `1`–`4`.
+
 Le bouton « Suivi auto » met le défilement en pause. Les animations sont désactivées si le système demande
 `prefers-reduced-motion`.
 
@@ -86,6 +111,8 @@ navigateurs via Server-Sent Events. Le navigateur ne parle jamais à GitHub ni �
 | GET | `/api/stats` | total, taux d'échec, durée moyenne, taux de signature |
 | POST | `/api/deployments` | enregistrement par la CI en fin de run (jeton Bearer) |
 | GET | `/healthz` | sonde de santé |
+| POST | `/api/demo/release` | lance un scénario `{"scenario":"cve"}` (mode démo uniquement) |
+| POST | `/api/demo/pause` · `/play` · `/step` | pilotage de la release (mode démo uniquement) |
 
 ### Mode mock (étape 1)
 
@@ -159,3 +186,6 @@ curl -X POST http://localhost:8080/api/deployments \
 | **Erreurs et logs maîtrisés** | Le client reçoit un message générique, le détail reste dans les logs JSON. Pas de query string ni d'en-têtes (jetons) dans les logs. Récupération des panics. |
 | **Arrêt propre sur SIGTERM** | Indispensable en conteneur : les connexions en cours se terminent avant l'arrêt (rolling update de Container Apps, `podman-compose down`). |
 | **Sous-commande `healthcheck`** | L'image distroless n'aura ni `curl` ni shell : le binaire sait vérifier lui-même `/healthz` pour le `HEALTHCHECK`. |
+| **Contrôles de démo cloisonnés** | Les routes `/api/demo/*` modifient l'état du serveur : elles n'existent qu'avec la source mock, sans jeton seulement si `APP_ENV=local`, et ailleurs uniquement si `DEMO_TOKEN` (32 caractères min., comparaison à temps constant) est configuré. Avec les vraies sources, la page reste en lecture seule. |
+| **Protection CSRF des commandes** | Les commandes exigent `Content-Type: application/json` : une page d'un autre site ne peut pas les envoyer sans requête CORS préliminaire, que le serveur n'accepte pas. Un en-tête `Origin` différent de l'hôte servi est refusé. Corps limité à 1 Kio, champs inconnus refusés, scénarios en liste blanche. |
+| **Jeton de démo côté navigateur** | Saisi par le présentateur, jamais livré avec la page, conservé en `sessionStorage` (effacé à la fermeture de l'onglet) et retiré dès qu'il est refusé. |
