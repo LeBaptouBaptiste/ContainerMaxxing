@@ -267,6 +267,24 @@ sh scripts/init-secrets.sh
 - **Montés comme fichiers** dans `/run/secrets` (variantes `*_FILE`) et non passés en variables d'environnement :
   ils n'apparaissent ni dans `podman inspect` ni dans l'environnement des processus.
 
+## Workflow Git
+
+Le travail avance par **petites PR**, une par sous-tâche (voire par étape). Quand une étape s'appuie sur la
+précédente, sa PR cible quand même `main` et indique dans sa description :
+
+```
+Dépend de #6
+```
+
+Le workflow `.github/workflows/dependances.yml` publie alors un statut obligatoire `dependances` sur la PR :
+**en échec tant que la PR citée n'est pas fusionnée**, ce qui grise le bouton « Merge ». À chaque fusion, toutes
+les PR ouvertes sont réévaluées : la suivante se débloque toute seule. Tant que la précédente est ouverte, le diff
+d'une PR empilée contient aussi ses commits ; ils disparaissent du diff dès qu'elle est fusionnée.
+
+Côté sécurité, le workflow n'utilise aucune action tierce (seulement `gh`), tourne avec le jeton éphémère du run et
+des permissions minimales (`pull-requests: read`, `statuses: write`), et ne place jamais la description de la PR
+dans le script (pas d'injection de commande possible).
+
 ## Développement
 
 Ni Go ni Node ne sont nécessaires sur le poste, Docker suffit. L'environnement de dev reste lancé en
