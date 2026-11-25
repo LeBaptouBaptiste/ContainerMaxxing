@@ -1,82 +1,27 @@
 // ContainerMaxxing — frontend sans dépendance ni build.
-// Règle de sécurité : aucune donnée n'est insérée via innerHTML ; tout passe
-// par textContent / createElement, et les liens ne sont acceptés qu'en https.
+// app.js : bandeau, flux temps réel, panneau de détails et historique.
+// La chaîne animée est dans chain.js, les helpers DOM dans dom.js.
 
-const STATUS_LABEL = {
-  success: "OK", running: "en cours", failed: "échec", pending: "en attente", unknown: "inconnu",
-};
-const STATUS_ICON = { success: "✓", failed: "✕", running: "", pending: "", unknown: "?" };
+import {
+  $, el, svg, safeLink, statusBadge, fmtDur, fmtDate, shortDigest, pct, getJSON, STATUS_LABEL, LEVEL_COLOR,
+} from "./dom.js";
+import { createChain } from "./chain.js";
+
 const SEVERITIES = [
   { key: "cve_critical", label: "Critical", color: "var(--critical)" },
   { key: "cve_high", label: "High", color: "var(--serious)" },
   { key: "cve_medium", label: "Medium", color: "var(--warning)" },
 ];
-const LEVEL_COLOR = {
-  critical: "var(--critical)", high: "var(--serious)", medium: "var(--warning)", low: "var(--low)", info: "var(--accent)",
-};
 
 const state = {
   snapshot: null,
   deployments: [],
-  stats: null,
-  selected: [],          // ids sélectionnés pour la comparaison (max 2)
-  drawer: null,          // { kind: "stage", id } | { kind: "deployment", id }
-  detailCache: new Map() // id -> déploiement avec steps
+  selected: [],           // ids sélectionnés pour la comparaison (max 2)
+  drawer: null,           // { kind: "stage", id } | { kind: "deployment", id }
+  detailCache: new Map(), // id -> déploiement avec steps
 };
 
-const $ = (sel) => document.querySelector(sel);
-
-// ---------- helpers DOM -------------------------------------------------------
-
-function el(tag, props = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (v == null || v === false) continue;
-    if (k === "class") node.className = v;
-    else if (k === "text") node.textContent = v;
-    else if (k === "dataset") Object.assign(node.dataset, v);
-    // via CSSOM : un attribut style="" serait bloqué par la CSP (style-src 'self')
-    else if (k === "style") Object.assign(node.style, v);
-    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
-    else node.setAttribute(k, v === true ? "" : v);
-  }
-  for (const c of children.flat()) {
-    if (c == null || c === false) continue;
-    node.append(c instanceof Node ? c : document.createTextNode(String(c)));
-  }
-  return node;
-}
-
-function safeLink(url, text) {
-  try {
-    const u = new URL(url);
-    if (u.protocol === "https:") {
-      return el("a", { href: u.href, target: "_blank", rel: "noopener noreferrer" }, text);
-    }
-  } catch { /* URL invalide : on affiche le texte seul */ }
-  return document.createTextNode(text);
-}
-
-function statusBadge(status, label) {
-  return el("span", { class: "status", dataset: { status } },
-    el("span", { class: "status-icon", "aria-hidden": "true", text: STATUS_ICON[status] ?? "" }),
-    el("span", { text: label ?? STATUS_LABEL[status] ?? status }));
-}
-
-const fmtDur = (s) => {
-  if (s == null) return "—";
-  s = Math.round(s);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
-};
-const fmtDate = (iso) => new Date(iso).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-const shortDigest = (d) => (d ? d.replace("sha256:", "").slice(0, 12) : "");
-const pct = (x) => `${(x * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %`;
-
-async function getJSON(url) {
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  return res.json();
-}
+const chain = createChain({ onOpenDetails: (id) => openDrawer({ kind: "stage", id }) });
 
 // ---------- bandeau -------------------------------------------------------------
 
@@ -96,55 +41,24 @@ function setLive(stateName, text) {
   $("#live-text").textContent = text;
 }
 
-// ---------- pipeline ------------------------------------------------------------
-
-function renderPipeline(stages) {
-  const list = $("#pipeline");
-  stages.forEach((st, i) => {
-    let li = list.children[i];
-    if (!li) {
-      // Le bouton est créé une seule fois puis mis à jour sur place,
-      // pour garder le focus clavier pendant les mises à jour en direct.
-      const btn = el("button", {
-        type: "button", class: "stage", "aria-controls": "drawer", "aria-expanded": "false",
-        onclick: () => openDrawer({ kind: "stage", id: st.id }),
-      });
-      li = el("li", {}, btn);
-      list.append(li);
-    }
-    li.dataset.status = st.status;
-    const btn = li.firstElementChild;
-    btn.dataset.status = st.status;
-    btn.dataset.stage = st.id;
-    btn.setAttribute("aria-expanded", String(state.drawer?.kind === "stage" && state.drawer.id === st.id));
-    btn.replaceChildren(
-      el("div", { class: "stage-top" },
-        el("span", { class: "stage-index", text: String(i + 1).padStart(2, "0") }),
-        statusBadge(st.status)),
-      el("div", { class: "stage-label", text: st.label }),
-      el("div", { class: "stage-summary", text: st.summary }),
-    );
-  });
-}
-
 // ---------- panneau de détails -------------------------------------------------
 
+let lastFocus = null;
+
 function openDrawer(target) {
+  lastFocus = document.activeElement;
   state.drawer = target;
   $("#drawer").hidden = false;
   $("#scrim").hidden = false;
   renderDrawer();
-  if (state.snapshot) renderPipeline(state.snapshot.stages);
   $("#drawer-close").focus();
 }
 
 function closeDrawer() {
-  const prev = state.drawer;
   state.drawer = null;
   $("#drawer").hidden = true;
   $("#scrim").hidden = true;
-  if (state.snapshot) renderPipeline(state.snapshot.stages);
-  if (prev?.kind === "stage") document.querySelector(`.stage[data-stage="${prev.id}"]`)?.focus();
+  lastFocus?.focus?.();
 }
 
 function renderDrawer() {
@@ -207,7 +121,7 @@ function renderStageDrawer(st) {
     section("Détails", fieldsList(st.fields)),
   ];
   if (st.scans?.length) body.push(section("Analyses de sécurité", st.scans.map(scanCard)));
-  if (st.steps?.length) body.push(section("Steps du job", stepsList(st.steps)));
+  if (st.steps?.length) body.push(section("Steps", stepsList(st.steps)));
   $("#drawer-body").replaceChildren(...body);
 }
 
@@ -225,7 +139,7 @@ async function renderDeploymentDrawer(id) {
   let d;
   try {
     d = await loadDeployment(id);
-  } catch (e) {
+  } catch {
     $("#drawer-title").textContent = "Erreur de chargement";
     return;
   }
@@ -273,14 +187,6 @@ function renderLegend() {
       el("span", { class: "swatch", style: { background: s.color }, "aria-hidden": "true" }), s.label)));
 }
 
-const SVG = "http://www.w3.org/2000/svg";
-function svg(tag, attrs = {}, text) {
-  const n = document.createElementNS(SVG, tag);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (text != null) n.textContent = text;
-  return n;
-}
-
 function renderChart(items) {
   const data = [...items].reverse(); // chronologique
   const W = 1100, H = 220, m = { t: 12, r: 8, b: 40, l: 34 };
@@ -304,11 +210,10 @@ function renderChart(items) {
     const segs = SEVERITIES.map((s) => ({ ...s, v: d[s.key] })).filter((s) => s.v > 0);
     segs.forEach((s, j) => {
       const y0 = y(base), y1 = y(base + s.v);
-      const isTop = j === segs.length - 1;
       // 2px d'écart entre segments empilés ; extrémité haute arrondie.
       const gap = j > 0 ? 2 : 0;
       const h = Math.max(y0 - y1 - gap, 1);
-      root.append(svg("path", { d: barPath(cx - bw / 2, y1, bw, h, isTop ? 3 : 0), fill: s.color }));
+      root.append(svg("path", { d: barPath(cx - bw / 2, y1, bw, h, j === segs.length - 1 ? 3 : 0), fill: s.color }));
       base += s.v;
     });
     if (d.status === "failed") {
@@ -354,7 +259,7 @@ function renderTimeline(items) {
   const rows = items.map((d) => {
     const checked = state.selected.includes(d.id);
     const cb = el("input", {
-      type: "checkbox", "aria-label": `Comparer ${d.tag}`, checked,
+      type: "checkbox", "aria-label": `Comparer ${d.tag} (${d.target})`, checked,
       onclick: (e) => e.stopPropagation(),
       onchange: () => toggleSelect(d.id),
     });
@@ -389,18 +294,17 @@ function toggleSelect(id) {
 async function renderCompare() {
   const box = $("#compare");
   if (state.selected.length !== 2) { box.hidden = true; return; }
-  // A = la plus ancienne, B = la plus récente
   const [a, b] = await Promise.all(state.selected.map(loadDeployment));
   const [older, newer] = new Date(a.started_at) <= new Date(b.started_at) ? [a, b] : [b, a];
 
-  const card = (label, va, vb, fmt = String, lowerIsBetter = true) => {
+  const card = (label, va, vb, fmt = String) => {
     const diff = vb - va;
-    const trend = diff === 0 ? "same" : (diff < 0) === lowerIsBetter ? "better" : "worse";
-    const sign = diff > 0 ? "+" : "";
+    const trend = diff === 0 ? "same" : diff < 0 ? "better" : "worse";
+    const sign = diff > 0 ? "+" : "-";
     return el("div", { class: "delta-card" },
       el("span", { class: "eyebrow", text: label }),
       el("div", { class: "delta-values", text: `${fmt(va)} → ${fmt(vb)}` }),
-      el("div", { class: "delta", dataset: { trend }, text: diff === 0 ? "identique" : `${sign}${fmt === String ? diff : fmtDur(Math.abs(diff))}` }));
+      el("div", { class: "delta", dataset: { trend }, text: diff === 0 ? "identique" : `${sign}${fmt(Math.abs(diff))}` }));
   };
 
   const stepNames = [...new Set([...(older.steps ?? []), ...(newer.steps ?? [])].map((s) => s.name))];
@@ -409,7 +313,7 @@ async function renderCompare() {
 
   box.replaceChildren(
     el("div", { class: "compare-head" },
-      el("h2", { text: `Comparaison ${older.tag} → ${newer.tag}` }),
+      el("h2", { text: `Comparaison ${older.tag} (${older.target}) → ${newer.tag} (${newer.target})` }),
       el("button", { type: "button", class: "btn", onclick: () => { state.selected = []; renderHistory(); } }, "Effacer")),
     el("div", { class: "compare-grid" },
       card("CVE critical", older.cve_critical, newer.cve_critical),
@@ -438,7 +342,6 @@ function renderHistory() {
 async function refreshHistory() {
   const [list, stats] = await Promise.all([getJSON("/api/deployments?limit=30"), getJSON("/api/stats")]);
   state.deployments = list.items;
-  state.stats = stats;
   state.selected = state.selected.filter((id) => list.items.some((d) => d.id === id));
   renderStats(stats);
   renderHistory();
@@ -447,7 +350,7 @@ async function refreshHistory() {
 function onSnapshot(s) {
   state.snapshot = s;
   renderBanner(s);
-  renderPipeline(s.stages);
+  chain.update(s);
   if (state.drawer?.kind === "stage") renderDrawer();
 }
 

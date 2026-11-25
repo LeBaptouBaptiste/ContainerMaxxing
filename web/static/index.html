@@ -30,16 +30,50 @@
   </header>
 
   <main>
-    <section class="pipeline-section" aria-labelledby="pipeline-title">
-      <div class="section-head">
-        <h2 id="pipeline-title">Chaîne de déploiement</h2>
-        <p class="hint">Cliquez sur une étape pour voir le détail. Mise à jour en direct.</p>
+    <section class="chain" aria-labelledby="chain-title">
+      <h2 id="chain-title" class="sr-only">Chaîne de déploiement</h2>
+
+      <div class="run-head">
+        <div class="run-id">
+          <span class="eyebrow">Release</span>
+          <span class="run-tag" id="run-tag">—</span>
+          <span class="run-number" id="run-number"></span>
+          <span id="run-status"></span>
+          <span class="run-step" id="run-step"></span>
+        </div>
+        <div class="chain-controls">
+          <span class="chain-mode" id="chain-mode"></span>
+          <button type="button" class="icon-btn" id="chain-prev" aria-label="Étape précédente">◀</button>
+          <button type="button" class="btn" id="chain-auto" aria-pressed="true">❚❚ Suivi auto</button>
+          <button type="button" class="icon-btn" id="chain-next" aria-label="Étape suivante">▶</button>
+        </div>
       </div>
-      <div class="pipeline-groups" aria-hidden="true">
+      <div class="run-progress" aria-hidden="true">
+        <div class="run-progress-bar" id="run-progress"></div>
+        <span class="run-count" id="run-count"></span>
+      </div>
+
+      <div class="groups" aria-hidden="true">
         <span class="group group-local">Déploiement statique · phobos</span>
         <span class="group group-ci">Déploiement continu · Azure</span>
       </div>
-      <ol class="pipeline" id="pipeline"></ol>
+
+      <div class="track" id="track">
+        <div class="track-line" aria-hidden="true"><div class="track-fill" id="track-fill"></div></div>
+        <div class="packet" id="packet" aria-hidden="true">
+          <span class="packet-box"></span>
+          <span class="packet-tag" id="packet-tag"></span>
+          <span class="packet-note" id="packet-note"></span>
+        </div>
+        <ol class="nodes" id="nodes"></ol>
+      </div>
+
+      <div class="spot-wrap">
+        <span class="caret" id="caret" aria-hidden="true"></span>
+        <article class="spotlight" id="spotlight"></article>
+        <div class="tour-bar" id="tour-bar" hidden></div>
+      </div>
+      <p class="sr-only" id="chain-announce" aria-live="polite"></p>
     </section>
 
     <section class="history-section" aria-labelledby="history-title">
