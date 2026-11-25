@@ -7,24 +7,32 @@
 //                  (sauf si le suivi auto est désactivé).
 
 import { $, el, statusBadge, fmtDur, LEVEL_COLOR, STATUS_LABEL, stageIcon, reducedMotion } from "./dom.js";
+import type { RunInfo, Snapshot, Stage, StageID, Step, Status } from "./types.js";
 
 const TOUR_MS = 5000;
 const RESUME_MS = 20000;
 const MAX_FIELDS = 5;
 
-export function createChain({ onOpenDetails }) {
+type Mode = "live" | "tour" | "manual" | null;
+
+export interface Chain {
+  update(snap: Snapshot): void;
+  focusStage(id: StageID): void;
+}
+
+export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) => void }): Chain {
   const s = {
-    snap: null,
-    focus: null,       // id de l'étape mise en avant
-    mode: null,        // "live" | "tour" | "manual"
-    auto: true,        // suivi automatique activé
-    tourTimer: null,
-    resumeTimer: null,
+    snap: null as Snapshot | null,
+    focus: null as StageID | null, // étape mise en avant
+    mode: null as Mode,
+    auto: true,                    // suivi automatique activé
+    tourTimer: undefined as ReturnType<typeof setInterval> | undefined,
+    resumeTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     resumeAt: 0,
-    rendered: "",      // clé du dernier rendu du spotlight (évite de reconstruire pour rien)
+    rendered: "",                  // clé du dernier rendu du spotlight (évite de reconstruire pour rien)
   };
 
-  const nodes = $("#nodes");
+  const nodes = $<HTMLOListElement>("#nodes");
   const spotlight = $("#spotlight");
 
   // --- contrôles -------------------------------------------------------------
@@ -33,27 +41,30 @@ export function createChain({ onOpenDetails }) {
   $("#chain-next").addEventListener("click", () => step(1));
   $("#chain-auto").addEventListener("click", () => {
     s.auto = !s.auto;
-    if (s.auto) { s.mode = null; clearTimeout(s.resumeTimer); decide(); }
-    else { stopTour(); clearTimeout(s.resumeTimer); s.mode = "manual"; }
+    clearTimeout(s.resumeTimer);
+    if (s.auto) { s.mode = null; decide(); }
+    else { stopTour(); s.mode = "manual"; }
     render();
   });
   document.addEventListener("keydown", (e) => {
-    if (!$("#drawer").hidden || e.target.closest("input, textarea, select")) return;
+    const target = e.target as Element | null;
+    if (!$("#drawer").hidden || target?.closest("input, textarea, select")) return;
     if (e.key === "ArrowLeft") step(-1);
     else if (e.key === "ArrowRight") step(1);
   });
 
-  function ids() { return s.snap?.stages.map((st) => st.id) ?? []; }
+  const ids = (): StageID[] => s.snap?.stages.map((st) => st.id) ?? [];
 
-  function step(delta) {
+  function step(delta: number): void {
     const list = ids();
     if (!list.length) return;
-    const i = Math.max(0, list.indexOf(s.focus));
-    pick(list[(i + delta + list.length) % list.length]);
+    const i = Math.max(0, s.focus ? list.indexOf(s.focus) : 0);
+    const next = list[(i + delta + list.length) % list.length];
+    if (next) pick(next);
   }
 
   // Choix manuel : on fige le focus, puis on reprend le suivi auto plus tard.
-  function pick(id) {
+  function pick(id: StageID): void {
     stopTour();
     s.mode = "manual";
     setFocus(id);
@@ -67,7 +78,7 @@ export function createChain({ onOpenDetails }) {
 
   // --- logique de focus ------------------------------------------------------
 
-  function decide() {
+  function decide(): void {
     if (s.mode === "manual" || !s.snap) return;
     const run = s.snap.run;
     if (run && (run.status === "running" || run.status === "failed") && run.stage) {
@@ -79,83 +90,84 @@ export function createChain({ onOpenDetails }) {
     }
   }
 
-  function startTour() {
+  function startTour(): void {
     s.mode = "tour";
-    if (!s.focus) setFocus(ids()[0]);
+    if (!s.focus) {
+      const first = ids()[0];
+      if (first) setFocus(first);
+    }
     restartTourBar();
     s.tourTimer = setInterval(() => {
       const list = ids();
-      setFocus(list[(list.indexOf(s.focus) + 1) % list.length]);
+      const next = list[((s.focus ? list.indexOf(s.focus) : -1) + 1) % list.length];
+      if (next) setFocus(next);
       restartTourBar();
       render();
     }, TOUR_MS);
   }
 
-  function stopTour() {
+  function stopTour(): void {
     clearInterval(s.tourTimer);
-    s.tourTimer = null;
+    s.tourTimer = undefined;
   }
 
-  function restartTourBar() {
+  function restartTourBar(): void {
     const bar = $("#tour-bar");
     bar.classList.remove("run");
     void bar.offsetWidth; // force le redémarrage de l'animation CSS
     bar.classList.add("run");
   }
 
-  function setFocus(id) {
-    if (!id || id === s.focus) return;
-    const list = ids();
-    const dir = list.indexOf(id) >= list.indexOf(s.focus) ? "next" : "prev";
+  function setFocus(id: StageID): void {
+    if (id === s.focus) return;
     s.focus = id;
     s.rendered = "";
-    spotlight.dataset.dir = dir;
     if (!reducedMotion()) {
       spotlight.classList.remove("swap");
       void spotlight.offsetWidth;
       spotlight.classList.add("swap");
     }
     const st = s.snap?.stages.find((x) => x.id === id);
-    if (st) $("#chain-announce").textContent = `Étape ${st.label} : ${STATUS_LABEL[st.status] ?? st.status}`;
+    if (st) $("#chain-announce").textContent = `Étape ${st.label} : ${STATUS_LABEL[st.status]}`;
   }
 
   // --- rendu -------------------------------------------------------------------
 
-  function update(snap) {
+  function update(snap: Snapshot): void {
     s.snap = snap;
     decide();
     render();
   }
 
-  function render() {
+  function render(): void {
     if (!s.snap) return;
-    const stages = s.snap.stages;
-    const run = s.snap.run;
-    renderRunHeader(run);
+    const { stages, run } = s.snap;
+    const focused = stages.find((x) => x.id === s.focus) ?? stages[0];
+    if (run) renderRunHeader(run);
     renderNodes(stages);
     renderTrack(stages, run);
-    renderSpotlight(stages.find((x) => x.id === s.focus) ?? stages[0], stages);
+    if (focused) renderSpotlight(focused, stages);
     renderMode();
   }
 
-  function renderRunHeader(run) {
-    if (!run) return;
+  const RUN_LABEL: Partial<Record<Status, string>> = {
+    running: "release en cours", failed: "release bloquée", success: "release déployée",
+  };
+
+  function renderRunHeader(run: RunInfo): void {
     $("#run-tag").textContent = run.tag;
     $("#run-number").textContent = `run #${run.number}`;
-    $("#run-status").replaceChildren(statusBadge(run.status, {
-      running: "release en cours", failed: "release bloquée", success: "release déployée",
-    }[run.status]));
-    const stepText = run.status === "success" ? "toutes les étapes sont passées" : run.step_name ?? "";
-    $("#run-step").textContent = stepText;
+    $("#run-status").replaceChildren(statusBadge(run.status, RUN_LABEL[run.status]));
+    $("#run-step").textContent = run.status === "success" ? "toutes les étapes sont passées" : run.step_name ?? "";
     $("#run-count").textContent = `${run.steps_done} / ${run.step_count} steps`;
     const bar = $("#run-progress");
     bar.style.width = `${(run.steps_done / run.step_count) * 100}%`;
     bar.dataset.status = run.status;
   }
 
-  function renderNodes(stages) {
+  function renderNodes(stages: Stage[]): void {
     stages.forEach((st, i) => {
-      let li = nodes.children[i];
+      let li = nodes.children[i] as HTMLLIElement | undefined;
       if (!li) {
         // Créé une seule fois puis mis à jour sur place : garde le focus clavier.
         const btn = el("button", { type: "button", class: "node", onclick: () => pick(st.id) },
@@ -166,43 +178,45 @@ export function createChain({ onOpenDetails }) {
         li = el("li", {}, btn);
         nodes.append(li);
       }
-      const btn = li.firstElementChild;
+      const btn = li.firstElementChild as HTMLButtonElement;
+      const focused = st.id === s.focus;
       btn.dataset.status = st.status;
-      btn.dataset.focus = String(st.id === s.focus);
-      btn.setAttribute("aria-pressed", String(st.id === s.focus));
-      btn.setAttribute("aria-label", `${st.label} : ${STATUS_LABEL[st.status] ?? st.status}`);
+      btn.dataset.focus = String(focused);
+      btn.setAttribute("aria-pressed", String(focused));
+      btn.setAttribute("aria-label", `${st.label} : ${STATUS_LABEL[st.status]}`);
       const steps = st.steps ?? [];
       const done = steps.filter((x) => x.status === "success").length;
-      const p = steps.length ? (done / steps.length) * 100 : st.status === "success" ? 100 : 0;
-      btn.style.setProperty("--p", st.status === "success" ? 100 : p);
-      btn.querySelector(".node-status").replaceChildren(statusBadge(st.status));
+      const p = st.status === "success" ? 100 : steps.length ? (done / steps.length) * 100 : 0;
+      btn.style.setProperty("--p", String(p));
+      btn.querySelector(".node-status")?.replaceChildren(statusBadge(st.status));
     });
   }
 
-  function center(i, n) { return ((i + 0.5) / n) * 100; }
+  const center = (i: number, n: number): number => ((i + 0.5) / n) * 100;
 
-  function renderTrack(stages, run) {
+  function renderTrack(stages: Stage[], run: RunInfo | undefined): void {
     const n = stages.length;
     const list = stages.map((x) => x.id);
     let at = n - 1; // au repos : le paquet est arrivé en prod
-    if (run && run.stage && run.status !== "success") at = Math.max(0, list.indexOf(run.stage));
-    const track = $("#track");
-    track.dataset.status = run?.status ?? "success";
+    if (run?.stage && run.status !== "success") at = Math.max(0, list.indexOf(run.stage));
+    const status = run?.status ?? "success";
+    $("#track").dataset.status = status;
 
     // La ligne va du centre du premier nœud au centre du dernier.
-    const fill = run?.status === "success" ? 1 : at / (n - 1);
+    const fill = status === "success" ? 1 : at / (n - 1);
     $("#track-fill").style.width = `${fill * 100}%`;
 
     const packet = $("#packet");
     packet.style.left = `${center(at, n)}%`;
-    packet.dataset.status = run?.status ?? "success";
-    $("#packet-tag").textContent = run?.tag ?? s.snap.prod.tag;
-    $("#packet-note").textContent = run?.status === "success" ? "en prod" : run?.status === "failed" ? "bloquée" : "";
+    packet.dataset.status = status;
+    $("#packet-tag").textContent = run?.tag ?? s.snap?.prod.tag ?? "";
+    $("#packet-note").textContent = status === "success" ? "en prod" : status === "failed" ? "bloquée" : "";
 
-    $("#caret").style.left = `${center(Math.max(0, list.indexOf(s.focus)), n)}%`;
+    const focusIdx = s.focus ? Math.max(0, list.indexOf(s.focus)) : 0;
+    $("#caret").style.left = `${center(focusIdx, n)}%`;
   }
 
-  function renderMode() {
+  function renderMode(): void {
     const label = $("#chain-mode");
     const auto = $("#chain-auto");
     auto.setAttribute("aria-pressed", String(s.auto));
@@ -214,12 +228,13 @@ export function createChain({ onOpenDetails }) {
     else label.textContent = "suivi auto en pause";
   }
 
-  function renderSpotlight(st, stages) {
+  function renderSpotlight(st: Stage, stages: Stage[]): void {
     // Reconstruit seulement si l'étape affichée a changé de contenu.
     const key = JSON.stringify([st.id, st.status, st.summary, st.steps, st.scans, st.fields]);
     if (key === s.rendered) return;
     s.rendered = key;
     const i = stages.indexOf(st);
+    const steps = st.steps ?? [];
 
     const head = el("header", { class: "spot-head" },
       el("div", { class: "spot-icon", dataset: { status: st.status } }, stageIcon(st.id)),
@@ -227,18 +242,18 @@ export function createChain({ onOpenDetails }) {
         el("span", { class: "eyebrow", text: `Étape ${String(i + 1).padStart(2, "0")} / ${String(stages.length).padStart(2, "0")}` }),
         el("h3", { text: st.label }),
         el("div", { class: "spot-sub" }, statusBadge(st.status), el("span", { text: st.summary }))),
-      el("button", { type: "button", class: "btn", onclick: () => onOpenDetails(st.id) }, "Tous les détails →"));
+      el("button", { type: "button", class: "btn", onclick: () => onOpenDetails(st.id) }, "Détails"));
 
     spotlight.replaceChildren(head, el("div", { class: "spot-grid" },
-      el("section", { class: "spot-col" }, el("h4", { text: "Steps" }), stepsTimeline(st.steps ?? [])),
-      el("section", { class: "spot-col spot-term" }, el("h4", { text: "Journal" }), terminal(st.steps ?? [])),
+      el("section", { class: "spot-col" }, el("h4", { text: "Steps" }), stepsTimeline(steps)),
+      el("section", { class: "spot-col spot-term" }, el("h4", { text: "Journal" }), terminal(steps)),
       el("section", { class: "spot-col" }, el("h4", { text: "Infos clés" }), keyInfo(st))));
-    const term = spotlight.querySelector(".terminal");
+    const term = spotlight.querySelector<HTMLElement>(".terminal");
     if (term) term.scrollTop = term.scrollHeight;
     tick();
   }
 
-  function stepsTimeline(steps) {
+  function stepsTimeline(steps: Step[]): HTMLElement {
     if (!steps.length) return el("p", { class: "hint", text: "Aucun step." });
     return el("ol", { class: "spot-steps" }, steps.map((x) => el("li", { dataset: { status: x.status } },
       statusBadge(x.status, x.name),
@@ -247,8 +262,8 @@ export function createChain({ onOpenDetails }) {
         : el("span", { class: "step-dur", text: x.status === "pending" ? "—" : fmtDur(x.duration_s) }))));
   }
 
-  function terminal(steps) {
-    const lines = [];
+  function terminal(steps: Step[]): HTMLElement {
+    const lines: HTMLElement[] = [];
     for (const x of steps) {
       if (x.status === "pending") continue;
       lines.push(el("div", { class: "t-cmd", dataset: { status: x.status } }, el("span", { class: "t-prompt", text: "$ " }), x.name));
@@ -259,8 +274,8 @@ export function createChain({ onOpenDetails }) {
     return el("div", { class: "terminal", role: "log" }, lines);
   }
 
-  function keyInfo(st) {
-    const out = [el("dl", { class: "fields" }, st.fields.slice(0, MAX_FIELDS).flatMap((f) => [
+  function keyInfo(st: Stage): HTMLElement[] {
+    const out: HTMLElement[] = [el("dl", { class: "fields" }, (st.fields ?? []).slice(0, MAX_FIELDS).flatMap((f) => [
       el("dt", { text: f.label }),
       el("dd", { class: f.mono ? "mono clip" : null, title: f.value, text: f.value }),
     ]))];
@@ -277,9 +292,10 @@ export function createChain({ onOpenDetails }) {
   }
 
   // Compteurs en direct (durée du step en cours, compte à rebours de reprise).
-  function tick() {
-    for (const n of spotlight.querySelectorAll("[data-started]")) {
-      n.textContent = fmtDur((Date.now() - new Date(n.dataset.started)) / 1000);
+  function tick(): void {
+    for (const n of spotlight.querySelectorAll<HTMLElement>("[data-started]")) {
+      const started = n.dataset.started;
+      if (started) n.textContent = fmtDur((Date.now() - new Date(started).getTime()) / 1000);
     }
     if (s.mode === "manual" && s.auto) renderMode();
   }

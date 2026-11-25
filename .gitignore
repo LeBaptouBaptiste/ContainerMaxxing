@@ -18,3 +18,7 @@ reports/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Frontend : dépendances et JS compilé depuis web/src (npm run build)
+node_modules/
+web/static/js/

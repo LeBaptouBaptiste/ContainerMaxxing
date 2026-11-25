@@ -1,34 +1,39 @@
-// ContainerMaxxing — frontend sans dépendance ni build.
-// app.js : bandeau, flux temps réel, panneau de détails et historique.
-// La chaîne animée est dans chain.js, les helpers DOM dans dom.js.
+// ContainerMaxxing — frontend sans framework, compilé par tsc (aucun bundler).
+// app.ts : bandeau, flux temps réel, panneau de détails et historique.
+// La chaîne animée est dans chain.ts, les helpers DOM dans dom.ts.
 
 import {
   $, el, svg, safeLink, statusBadge, fmtDur, fmtDate, shortDigest, pct, getJSON, STATUS_LABEL, LEVEL_COLOR,
 } from "./dom.js";
 import { createChain } from "./chain.js";
+import type { Deployment, DeploymentStep, Field, Scan, Snapshot, Stage, StageID, Stats, Step } from "./types.js";
 
-const SEVERITIES = [
+type SeverityKey = "cve_critical" | "cve_high" | "cve_medium";
+const SEVERITIES: ReadonlyArray<{ key: SeverityKey; label: string; color: string }> = [
   { key: "cve_critical", label: "Critical", color: "var(--critical)" },
   { key: "cve_high", label: "High", color: "var(--serious)" },
   { key: "cve_medium", label: "Medium", color: "var(--warning)" },
 ];
 
+type DrawerTarget = { kind: "stage"; id: StageID } | { kind: "deployment"; id: number };
+
 const state = {
-  snapshot: null,
-  deployments: [],
-  selected: [],           // ids sélectionnés pour la comparaison (max 2)
-  drawer: null,           // { kind: "stage", id } | { kind: "deployment", id }
-  detailCache: new Map(), // id -> déploiement avec steps
+  snapshot: null as Snapshot | null,
+  deployments: [] as Deployment[],
+  selected: [] as number[],          // ids sélectionnés pour la comparaison (max 2)
+  drawer: null as DrawerTarget | null,
+  detailCache: new Map<number, Deployment>(),
 };
 
 const chain = createChain({ onOpenDetails: (id) => openDrawer({ kind: "stage", id }) });
 
 // ---------- bandeau -------------------------------------------------------------
 
-function renderBanner(s) {
+function renderBanner(s: Snapshot): void {
   $("#prod-tag").textContent = s.prod.tag || "—";
-  $("#prod-digest").textContent = s.prod.digest ? `@${shortDigest(s.prod.digest)}` : "";
-  $("#prod-digest").title = s.prod.digest || "";
+  const digest = $("#prod-digest");
+  digest.textContent = s.prod.digest ? `@${shortDigest(s.prod.digest)}` : "";
+  digest.title = s.prod.digest || "";
   const env = $("#env-badge");
   env.textContent = s.environment;
   env.dataset.env = s.environment;
@@ -36,17 +41,17 @@ function renderBanner(s) {
   document.title = `${s.prod.tag} · ContainerMaxxing`;
 }
 
-function setLive(stateName, text) {
+function setLive(stateName: "open" | "error", text: string): void {
   $("#live").dataset.state = stateName;
   $("#live-text").textContent = text;
 }
 
 // ---------- panneau de détails -------------------------------------------------
 
-let lastFocus = null;
+let lastFocus: HTMLElement | null = null;
 
-function openDrawer(target) {
-  lastFocus = document.activeElement;
+function openDrawer(target: DrawerTarget): void {
+  lastFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   state.drawer = target;
   $("#drawer").hidden = false;
   $("#scrim").hidden = false;
@@ -54,46 +59,47 @@ function openDrawer(target) {
   $("#drawer-close").focus();
 }
 
-function closeDrawer() {
+function closeDrawer(): void {
   state.drawer = null;
   $("#drawer").hidden = true;
   $("#scrim").hidden = true;
-  lastFocus?.focus?.();
+  lastFocus?.focus();
 }
 
-function renderDrawer() {
+function renderDrawer(): void {
   const d = state.drawer;
   if (!d) return;
   if (d.kind === "stage") {
     const st = state.snapshot?.stages.find((s) => s.id === d.id);
     if (st) renderStageDrawer(st);
   } else {
-    renderDeploymentDrawer(d.id);
+    void renderDeploymentDrawer(d.id);
   }
 }
 
-function section(title, ...content) {
+function section(title: string, ...content: (Node | Node[])[]): HTMLElement {
   return el("section", { class: "drawer-section" }, el("h3", { text: title }), ...content);
 }
 
-function fieldsList(fields) {
+function fieldsList(fields: Field[]): HTMLElement {
   return el("dl", { class: "fields" }, fields.flatMap((f) => [
     el("dt", { text: f.label }),
     el("dd", { class: f.mono ? "mono" : null }, f.link ? safeLink(f.link, f.value) : f.value),
   ]));
 }
 
-function stepsList(steps) {
+function stepsList(steps: (Step | DeploymentStep)[]): HTMLElement {
   return el("ol", { class: "steps" }, steps.map((s) => {
     const row = el("div", { class: "step-row" },
       statusBadge(s.status, s.name),
       el("span", { class: "step-dur", text: s.status === "pending" ? "—" : s.status === "running" ? "…" : fmtDur(s.duration_s) }));
-    if (!s.log) return el("li", {}, row);
-    return el("li", {}, el("details", {}, el("summary", {}, row), el("pre", { text: s.log })));
+    const log = "log" in s ? s.log : undefined;
+    if (!log) return el("li", {}, row);
+    return el("li", {}, el("details", {}, el("summary", {}, row), el("pre", { text: log })));
   }));
 }
 
-function scanCard(sc) {
+function scanCard(sc: Scan): HTMLElement {
   const card = el("div", { class: "scan" },
     el("div", { class: "scan-head" }, el("span", { class: "scan-tool", text: sc.tool }), statusBadge(sc.status)),
     el("p", { class: "scan-summary", text: sc.summary }));
@@ -113,30 +119,32 @@ function scanCard(sc) {
   return card;
 }
 
-function renderStageDrawer(st) {
+function renderStageDrawer(st: Stage): void {
   $("#drawer-eyebrow").textContent = `Étape · mise à jour ${new Date(st.updated_at).toLocaleTimeString("fr-FR")}`;
   $("#drawer-title").textContent = st.label;
-  const body = [
+  const body: HTMLElement[] = [
     el("div", {}, statusBadge(st.status), el("p", { class: "hint", text: st.summary })),
-    section("Détails", fieldsList(st.fields)),
+    section("Détails", fieldsList(st.fields ?? [])),
   ];
   if (st.scans?.length) body.push(section("Analyses de sécurité", st.scans.map(scanCard)));
   if (st.steps?.length) body.push(section("Steps", stepsList(st.steps)));
   $("#drawer-body").replaceChildren(...body);
 }
 
-async function loadDeployment(id) {
-  if (!state.detailCache.has(id)) {
-    state.detailCache.set(id, await getJSON(`/api/deployments/${encodeURIComponent(id)}`));
+async function loadDeployment(id: number): Promise<Deployment> {
+  let d = state.detailCache.get(id);
+  if (!d) {
+    d = await getJSON<Deployment>(`/api/deployments/${encodeURIComponent(id)}`);
+    state.detailCache.set(id, d);
   }
-  return state.detailCache.get(id);
+  return d;
 }
 
-async function renderDeploymentDrawer(id) {
+async function renderDeploymentDrawer(id: number): Promise<void> {
   $("#drawer-eyebrow").textContent = "Déploiement";
   $("#drawer-title").textContent = "chargement…";
   $("#drawer-body").replaceChildren();
-  let d;
+  let d: Deployment;
   try {
     d = await loadDeployment(id);
   } catch {
@@ -146,8 +154,8 @@ async function renderDeploymentDrawer(id) {
   if (state.drawer?.kind !== "deployment" || state.drawer.id !== id) return;
   $("#drawer-eyebrow").textContent = `Déploiement #${d.id} · ${d.target}`;
   $("#drawer-title").textContent = d.tag;
-  const fields = [
-    { label: "Statut", value: STATUS_LABEL[d.status] ?? d.status },
+  const fields: Field[] = [
+    { label: "Statut", value: STATUS_LABEL[d.status] },
     { label: "Cible", value: d.target },
     { label: "Digest", value: d.digest, mono: true },
     { label: "CVE", value: `${d.cve_critical} critical · ${d.cve_high} high · ${d.cve_medium} medium` },
@@ -166,8 +174,8 @@ async function renderDeploymentDrawer(id) {
 
 // ---------- historique : stats --------------------------------------------------
 
-function renderStats(s) {
-  const tile = (label, value, sub) => el("div", { class: "stat" },
+function renderStats(s: Stats): void {
+  const tile = (label: string, value: string, sub: string) => el("div", { class: "stat" },
     el("span", { class: "eyebrow", text: label }),
     el("div", { class: "stat-value", text: value }),
     el("div", { class: "stat-sub", text: sub }));
@@ -181,13 +189,13 @@ function renderStats(s) {
 
 // ---------- historique : graphique CVE ------------------------------------------
 
-function renderLegend() {
+function renderLegend(): void {
   $("#cve-legend").replaceChildren(...SEVERITIES.map((s) =>
     el("span", { class: "legend-item" },
       el("span", { class: "swatch", style: { background: s.color }, "aria-hidden": "true" }), s.label)));
 }
 
-function renderChart(items) {
+function renderChart(items: Deployment[]): void {
   const data = [...items].reverse(); // chronologique
   const W = 1100, H = 220, m = { t: 12, r: 8, b: 40, l: 34 };
   const iw = W - m.l - m.r, ih = H - m.t - m.b;
@@ -195,7 +203,7 @@ function renderChart(items) {
   const maxV = Math.max(4, ...totals);
   const step = maxV <= 8 ? 2 : maxV <= 20 ? 5 : 10;
   const top = Math.ceil(maxV / step) * step;
-  const y = (v) => m.t + ih - (v / top) * ih;
+  const y = (v: number) => m.t + ih - (v / top) * ih;
   const band = iw / Math.max(data.length, 1);
   const bw = Math.min(28, band * 0.55);
 
@@ -222,7 +230,7 @@ function renderChart(items) {
     root.append(svg("text", { class: "tag-label", x: cx, y: H - m.b + 16, "text-anchor": "middle" }, d.tag));
     root.append(svg("text", { class: "axis-label", x: cx, y: H - m.b + 30, "text-anchor": "middle" }, d.target));
     const hit = svg("rect", { class: "hit" + (state.selected.includes(d.id) ? " selected" : ""), x: m.l + band * i, y: m.t, width: band, height: ih + 34 });
-    hit.addEventListener("mousemove", (e) => showTooltip(e, d));
+    hit.addEventListener("mousemove", (e) => showTooltip(e as MouseEvent, d));
     hit.addEventListener("mouseleave", hideTooltip);
     hit.addEventListener("click", () => openDrawer({ kind: "deployment", id: d.id }));
     root.append(hit);
@@ -230,18 +238,18 @@ function renderChart(items) {
   $("#cve-chart").replaceChildren(root);
 }
 
-function barPath(x, yTop, w, h, r) {
+function barPath(x: number, yTop: number, w: number, h: number, r: number): string {
   r = Math.min(r, h, w / 2);
   const yb = yTop + h;
   return `M${x},${yb} V${yTop + r} Q${x},${yTop} ${x + r},${yTop} H${x + w - r} Q${x + w},${yTop} ${x + w},${yTop + r} V${yb} Z`;
 }
 
-function showTooltip(e, d) {
+function showTooltip(e: MouseEvent, d: Deployment): void {
   const tt = $("#tooltip");
-  const row = (k, v) => el("div", { class: "tt-row" }, el("span", { text: k }), el("span", { text: v }));
+  const row = (k: string, v: string) => el("div", { class: "tt-row" }, el("span", { text: k }), el("span", { text: v }));
   tt.replaceChildren(
     el("div", { class: "tt-title", text: `${d.tag} · ${d.target}` }),
-    row("Statut", STATUS_LABEL[d.status] ?? d.status),
+    row("Statut", STATUS_LABEL[d.status]),
     ...SEVERITIES.map((s) => row(s.label, String(d[s.key]))),
     row("Durée", fmtDur(d.duration_s)),
   );
@@ -250,17 +258,17 @@ function showTooltip(e, d) {
   tt.style.left = `${x}px`;
   tt.style.top = `${e.clientY + 14}px`;
 }
-function hideTooltip() { $("#tooltip").hidden = true; }
+function hideTooltip(): void { $("#tooltip").hidden = true; }
 
 // ---------- historique : timeline ----------------------------------------------
 
-function renderTimeline(items) {
-  const sevCell = (v) => el("td", { class: "num" }, el("span", { class: v ? "sev" : "sev zero", text: String(v) }));
+function renderTimeline(items: Deployment[]): void {
+  const sevCell = (v: number) => el("td", { class: "num" }, el("span", { class: v ? "sev" : "sev zero", text: String(v) }));
   const rows = items.map((d) => {
     const checked = state.selected.includes(d.id);
     const cb = el("input", {
       type: "checkbox", "aria-label": `Comparer ${d.tag} (${d.target})`, checked,
-      onclick: (e) => e.stopPropagation(),
+      onclick: (e: Event) => e.stopPropagation(),
       onchange: () => toggleSelect(d.id),
     });
     return el("tr", { class: checked ? "selected" : null, onclick: () => openDrawer({ kind: "deployment", id: d.id }) },
@@ -273,13 +281,13 @@ function renderTimeline(items) {
       el("td", { text: d.signed ? "oui" : "non" }),
       el("td", { class: "num mono", text: fmtDur(d.duration_s) }),
       el("td", { text: fmtDate(d.started_at) }),
-      el("td", { onclick: (e) => e.stopPropagation() }, d.run_url ? safeLink(d.run_url, "run ↗") : "—"),
+      el("td", { onclick: (e: Event) => e.stopPropagation() }, d.run_url ? safeLink(d.run_url, "run ↗") : "—"),
     );
   });
   $("#timeline tbody").replaceChildren(...rows);
 }
 
-function toggleSelect(id) {
+function toggleSelect(id: number): void {
   const i = state.selected.indexOf(id);
   if (i >= 0) state.selected.splice(i, 1);
   else {
@@ -291,13 +299,14 @@ function toggleSelect(id) {
 
 // ---------- comparaison ----------------------------------------------------------
 
-async function renderCompare() {
+async function renderCompare(): Promise<void> {
   const box = $("#compare");
-  if (state.selected.length !== 2) { box.hidden = true; return; }
-  const [a, b] = await Promise.all(state.selected.map(loadDeployment));
+  const [idA, idB] = state.selected;
+  if (idA === undefined || idB === undefined) { box.hidden = true; return; }
+  const [a, b] = await Promise.all([loadDeployment(idA), loadDeployment(idB)]);
   const [older, newer] = new Date(a.started_at) <= new Date(b.started_at) ? [a, b] : [b, a];
 
-  const card = (label, va, vb, fmt = String) => {
+  const card = (label: string, va: number, vb: number, fmt: (n: number) => string = String) => {
     const diff = vb - va;
     const trend = diff === 0 ? "same" : diff < 0 ? "better" : "worse";
     const sign = diff > 0 ? "+" : "-";
@@ -308,8 +317,9 @@ async function renderCompare() {
   };
 
   const stepNames = [...new Set([...(older.steps ?? []), ...(newer.steps ?? [])].map((s) => s.name))];
-  const stepOf = (d, n) => d.steps?.find((s) => s.name === n);
-  const stepCell = (s) => el("td", { class: "num mono", text: s ? (s.status === "success" ? fmtDur(s.duration_s) : STATUS_LABEL[s.status]) : "—" });
+  const stepOf = (d: Deployment, n: string) => d.steps?.find((s) => s.name === n);
+  const stepCell = (s: DeploymentStep | undefined) =>
+    el("td", { class: "num mono", text: s ? (s.status === "success" ? fmtDur(s.duration_s) : STATUS_LABEL[s.status]) : "—" });
 
   box.replaceChildren(
     el("div", { class: "compare-head" },
@@ -333,42 +343,56 @@ async function renderCompare() {
 
 // ---------- chargement & temps réel ---------------------------------------------
 
-function renderHistory() {
+function renderHistory(): void {
   renderChart(state.deployments);
   renderTimeline(state.deployments);
   renderCompare().catch(console.error);
 }
 
-async function refreshHistory() {
-  const [list, stats] = await Promise.all([getJSON("/api/deployments?limit=30"), getJSON("/api/stats")]);
+async function refreshHistory(): Promise<void> {
+  const [list, stats] = await Promise.all([
+    getJSON<{ items: Deployment[] }>("/api/deployments?limit=30"),
+    getJSON<Stats>("/api/stats"),
+  ]);
   state.deployments = list.items;
   state.selected = state.selected.filter((id) => list.items.some((d) => d.id === id));
   renderStats(stats);
   renderHistory();
 }
 
-function onSnapshot(s) {
+function onSnapshot(s: Snapshot): void {
   state.snapshot = s;
   renderBanner(s);
   chain.update(s);
   if (state.drawer?.kind === "stage") renderDrawer();
 }
 
-function connect() {
+function connect(): void {
   const es = new EventSource("/api/stream");
   es.addEventListener("open", () => setLive("open", "en direct"));
-  es.addEventListener("status", (e) => onSnapshot(JSON.parse(e.data)));
+  es.addEventListener("status", (e) => onSnapshot(JSON.parse((e as MessageEvent<string>).data) as Snapshot));
   es.addEventListener("deployment", () => refreshHistory().catch(console.error));
   // EventSource se reconnecte tout seul ; on se contente d'afficher l'état.
   es.addEventListener("error", () => setLive("error", "reconnexion…"));
+
+  // Mode dev uniquement (le serveur de prod n'émet jamais ces événements) :
+  // « reload » quand un fichier du frontend change, « hello » à chaque connexion
+  // avec l'identifiant de démarrage, qui change quand le serveur Go est recompilé.
+  let bootID: string | null = null;
+  es.addEventListener("reload", () => location.reload());
+  es.addEventListener("hello", (e) => {
+    const { boot } = JSON.parse((e as MessageEvent<string>).data) as { boot: string };
+    if (bootID !== null && bootID !== boot) location.reload();
+    bootID = boot;
+  });
 }
 
-function init() {
+function init(): void {
   renderLegend();
   $("#drawer-close").addEventListener("click", closeDrawer);
   $("#scrim").addEventListener("click", closeDrawer);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.drawer) closeDrawer(); });
-  getJSON("/api/status").then(onSnapshot).catch(() => {});
+  getJSON<Snapshot>("/api/status").then(onSnapshot).catch(() => {});
   refreshHistory().catch(console.error);
   connect();
 }
