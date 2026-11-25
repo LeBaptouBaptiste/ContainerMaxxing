@@ -12,7 +12,7 @@ import (
 type Config struct {
 	ListenAddr   string        // LISTEN_ADDR
 	Environment  string        // APP_ENV : local | phobos | azure
-	DataSource   string        // DATA_SOURCE : mock (seule valeur à l'étape 1)
+	DataSource   string        // DATA_SOURCE : mock (simulation + démo) | live (API GitHub)
 	PollInterval time.Duration // POLL_INTERVAL, borné entre 2s et 60s
 	IngestToken  string        // INGEST_TOKEN ou INGEST_TOKEN_FILE ; vide = POST désactivé
 	LogLevel     string        // LOG_LEVEL : debug | info | warn | error
@@ -32,6 +32,10 @@ type Config struct {
 	// Contrôles de démo (scénarios, pause, pas à pas), disponibles uniquement
 	// avec la source mock : sans jeton en local, avec DEMO_TOKEN ailleurs.
 	DemoToken string // DEMO_TOKEN ou DEMO_TOKEN_FILE
+
+	// Jeton GitHub en lecture seule (source live) : quota de 5 000 requêtes/h au
+	// lieu de 60/h. Obligatoire en live hors poste local.
+	GitHubToken string // GITHUB_TOKEN ou GITHUB_TOKEN_FILE
 
 	// Informations publiques affichées dans les panneaux (pas des secrets).
 	GitHubRepo     string // GITHUB_REPOSITORY (owner/repo)
@@ -78,11 +82,18 @@ func Load() (Config, error) {
 	if c.DemoToken != "" && len(c.DemoToken) < 32 {
 		return c, fmt.Errorf("DEMO_TOKEN trop court (32 caractères minimum)")
 	}
+	if c.GitHubToken, err = secret("GITHUB_TOKEN"); err != nil {
+		return c, err
+	}
 
 	// En mock, un poll = un step : 2 s donne une animation fluide pour la démo.
+	// En live, 10 s suffit à suivre un run Actions sans gaspiller de quota.
 	defPoll := "5s"
-	if c.DataSource == "mock" {
+	switch c.DataSource {
+	case "mock":
 		defPoll = "2s"
+	case "live":
+		defPoll = "10s"
 	}
 	if c.PollInterval, err = time.ParseDuration(env("POLL_INTERVAL", defPoll)); err != nil {
 		return c, fmt.Errorf("POLL_INTERVAL: %w", err)
@@ -100,6 +111,12 @@ func Load() (Config, error) {
 	}
 	switch c.DataSource {
 	case "mock":
+	case "live":
+		// Sans jeton, le quota (60 requêtes/h par IP) est épuisé en quelques minutes :
+		// toléré seulement pour un essai sur un poste local.
+		if c.GitHubToken == "" && c.Environment != "local" {
+			return c, fmt.Errorf("GITHUB_TOKEN requis avec DATA_SOURCE=live et APP_ENV=%s", c.Environment)
+		}
 	default:
 		return c, fmt.Errorf("DATA_SOURCE invalide: %q", c.DataSource)
 	}
