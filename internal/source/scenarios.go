@@ -86,13 +86,14 @@ func (m *Mock) SetPaused(paused bool) {
 	}
 }
 
-// Step termine le step en cours (même en pause) ; au repos, démarre une release.
+// Step termine le step en cours (même en pause). Une release terminée n'est pas
+// relancée : un appui de trop ne doit pas effacer l'écran de fin (échec ou
+// succès) pendant une présentation ; on relance explicitement via Trigger.
 func (m *Mock) Step(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r := m.run
 	if r.finished {
-		m.startRun(m.now(), m.autoScenario())
 		return nil
 	}
 	r.tick = phases[r.cur].ticks - 1 // la prochaine avance termine le step

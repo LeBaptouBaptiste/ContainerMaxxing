@@ -123,6 +123,24 @@ func TestPauseFreezesProgress(t *testing.T) {
 	}
 }
 
+func TestStepDoesNotRestartFinishedRelease(t *testing.T) {
+	m, _ := newSeededMock(t)
+	m.SetPaused(true)
+	if err := m.Trigger(ScenarioCVE); err != nil {
+		t.Fatal(err)
+	}
+	runToEnd(t, m)
+	number := m.run.number
+	for i := 0; i < 3; i++ {
+		if err := m.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m.run.number != number || !m.run.failed {
+		t.Fatal("un Step après la fin a relancé une release et effacé l'échec")
+	}
+}
+
 func TestTriggerRejectsUnknownScenario(t *testing.T) {
 	m, _ := newSeededMock(t)
 	if err := m.Trigger("rm -rf"); err != ErrUnknownScenario {
