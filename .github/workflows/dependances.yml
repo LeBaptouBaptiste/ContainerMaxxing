@@ -1,0 +1,75 @@
+# Dépendances entre PR : une PR dont la description contient « Dépend de #N » ne peut
+# pas être fusionnée tant que la PR #N ne l'est pas.
+#
+# Le workflow publie un statut de commit « dependances » (success/failure) sur le
+# dernier commit de la PR ; une règle de protection de `main` rend ce statut obligatoire.
+# Quand une PR est fusionnée, toutes les PR ouvertes sont réévaluées, ce qui débloque
+# automatiquement la suivante.
+#
+# Sécurité : aucune action tierce (seulement `gh`, préinstallé), jeton éphémère du run
+# avec les permissions minimales, et la description de la PR n'est jamais interpolée
+# dans le script (lue via l'API, uniquement passée à grep) : pas d'injection de commande.
+name: Dépendances entre PR
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, closed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: dependances-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dependances:
+    name: Contrôle des dépendances
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publier le statut « dependances »
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event.action }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # evaluate <pr> : vérifie que chaque PR citée par « Dépend de #N » est
+          # fusionnée, puis publie le statut sur le dernier commit de la PR.
+          evaluate() {
+            local pr="$1" json state sha deps pending="" d st desc
+            json=$(gh api "repos/$REPO/pulls/$pr")
+            state=$(jq -r '.state' <<<"$json")
+            [ "$state" = "open" ] || return 0
+            sha=$(jq -r '.head.sha' <<<"$json")
+            deps=$(jq -r '.body // ""' <<<"$json" \
+              | grep -oE '[Dd](é|e)pends? (de|on) #[0-9]+' | grep -oE '[0-9]+' | sort -un || true)
+            for d in $deps; do
+              [ "$(gh api "repos/$REPO/pulls/$d" --jq '.merged')" = "true" ] || pending="$pending #$d"
+            done
+            if [ -n "$pending" ]; then
+              st=failure; desc="En attente de la fusion de$pending"
+            else
+              st=success; desc="Aucune PR prérequise en attente"
+            fi
+            gh api -X POST "repos/$REPO/statuses/$sha" \
+              -f state="$st" -f context=dependances -f description="$desc" >/dev/null
+            echo "PR #$pr ($sha) : $st — $desc"
+          }
+
+          if [ "$EVENT" = "closed" ]; then
+            # Une PR fermée sans fusion ne débloque rien.
+            [ "$MERGED" = "true" ] || exit 0
+            # Une PR vient d'être fusionnée : on réévalue toutes les PR ouvertes.
+            for pr in $(gh api "repos/$REPO/pulls?state=open&per_page=100" --jq '.[].number'); do
+              evaluate "$pr"
+            done
+          else
+            evaluate "$NUMBER"
+          fi
