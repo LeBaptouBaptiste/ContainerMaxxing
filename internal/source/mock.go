@@ -223,6 +223,13 @@ func (m *Mock) Seed(ctx context.Context) error {
 	m.major, m.minor, m.patch = 1, 3, 2
 	m.runCount = len(history)
 	m.githubTag = m.prod.Tag
+	if len(existing) > 0 {
+		// Base persistante déjà remplie (redémarrage, podman-compose down/up) :
+		// on reprend là où l'historique s'est arrêté au lieu de rejouer les mêmes tags.
+		if err := m.restore(ctx); err != nil {
+			return err
+		}
+	}
 
 	// La dernière release réussie est affichée comme terminée au démarrage.
 	m.run = m.newRun(m.prod.Tag, lastAt, ScenarioHealthy)
@@ -233,6 +240,55 @@ func (m *Mock) Seed(ctx context.Context) error {
 	m.run.cur, m.run.finished = len(phases), true
 	m.nextRunAt = m.now().Add(4 * time.Second)
 	return nil
+}
+
+// restore reconstitue l'état courant à partir des déploiements déjà enregistrés.
+func (m *Mock) restore(ctx context.Context) error {
+	recent, err := m.store.ListDeployments(ctx, 200) // plus récent d'abord
+	if err != nil {
+		return err
+	}
+	var prodFound, phobosFound bool
+	var registry []regEntry
+	for _, d := range recent {
+		var a, b, c int
+		if _, err := fmt.Sscanf(d.Tag, "v%d.%d.%d", &a, &b, &c); err == nil && semverLess(m.major, m.minor, m.patch, a, b, c) {
+			m.major, m.minor, m.patch = a, b, c
+			m.githubTag = d.Tag
+		}
+		if d.Status != model.StatusSuccess {
+			continue
+		}
+		switch d.Target {
+		case "azure":
+			if !prodFound {
+				m.prod = model.ProdInfo{Tag: d.Tag, Digest: d.Digest, Since: d.StartedAt.Add(seconds(d.DurationS))}
+				prodFound = true
+			}
+			if len(registry) < 8 {
+				registry = append(registry, regEntry{tag: d.Tag, digest: d.Digest, signed: d.Signed})
+			}
+		case "phobos":
+			if !phobosFound {
+				m.phobosTag, phobosFound = d.Tag, true
+			}
+		}
+	}
+	if len(registry) > 0 {
+		m.registry = registry
+	}
+	m.runCount = max(m.runCount, len(recent))
+	return nil
+}
+
+func semverLess(a1, b1, c1, a2, b2, c2 int) bool {
+	if a1 != a2 {
+		return a1 < a2
+	}
+	if b1 != b2 {
+		return b1 < b2
+	}
+	return c1 < c2
 }
 
 func (m *Mock) Poll(ctx context.Context) (model.Snapshot, error) {

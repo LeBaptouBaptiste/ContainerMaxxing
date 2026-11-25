@@ -141,6 +141,41 @@ func TestStepDoesNotRestartFinishedRelease(t *testing.T) {
 	}
 }
 
+// Simule un podman-compose down/up : un nouveau mock sur la même base doit
+// reprendre l'historique (prod, tags) au lieu de rejouer les mêmes versions.
+func TestRestartContinuesHistory(t *testing.T) {
+	m, st := newSeededMock(t)
+	m.SetPaused(true)
+	for _, sc := range []string{ScenarioHealthy, ScenarioCVE} {
+		if err := m.Trigger(sc); err != nil {
+			t.Fatal(err)
+		}
+		runToEnd(t, m)
+	}
+	prod, lastTag := m.prod.Tag, m.run.tag
+	before, _ := st.ListDeployments(context.Background(), 500)
+
+	m2 := NewMock(config.Config{Environment: "local", GitHubRepo: "o/r", GHCRImage: "ghcr.io/o/r", CaaSApp: "c"}, st, "test")
+	if err := m2.Seed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := st.ListDeployments(context.Background(), 500)
+	if len(after) != len(before) {
+		t.Fatalf("le second démarrage a re-semé l'historique (%d → %d)", len(before), len(after))
+	}
+	if m2.prod.Tag != prod {
+		t.Fatalf("prod = %s, attendu %s (dernière release réussie)", m2.prod.Tag, prod)
+	}
+	if err := m2.Trigger(ScenarioHealthy); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range after {
+		if d.Tag == m2.run.tag {
+			t.Fatalf("la nouvelle release réutilise le tag %s (dernier : %s)", m2.run.tag, lastTag)
+		}
+	}
+}
+
 func TestTriggerRejectsUnknownScenario(t *testing.T) {
 	m, _ := newSeededMock(t)
 	if err := m.Trigger("rm -rf"); err != ErrUnknownScenario {
