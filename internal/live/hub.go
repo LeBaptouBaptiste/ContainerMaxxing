@@ -90,6 +90,11 @@ func (h *Hub) PublishDeployment(d model.Deployment) {
 	h.broadcast(Event{Name: "deployment", Data: b})
 }
 
+// PublishReload demande aux navigateurs de recharger la page (mode dev).
+func (h *Hub) PublishReload() {
+	h.broadcast(Event{Name: "reload", Data: []byte("{}")})
+}
+
 func (h *Hub) Subscribe() (<-chan Event, func(), error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

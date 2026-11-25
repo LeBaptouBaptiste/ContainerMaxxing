@@ -29,6 +29,7 @@ type Server struct {
 	ingestOn    bool
 	static      fs.FS
 	done        <-chan struct{} // fermé à l'arrêt : termine les flux SSE
+	devBootID   string          // non vide en mode dev uniquement
 }
 
 type Options struct {
@@ -38,12 +39,17 @@ type Options struct {
 	IngestToken string
 	Static      fs.FS
 	Done        <-chan struct{}
+	// DevBootID (mode dev) : envoyé dans un événement « hello » à chaque
+	// connexion SSE ; s'il change, le navigateur sait que le serveur a été
+	// recompilé et recharge la page.
+	DevBootID string
 }
 
 func New(o Options) *Server {
 	return &Server{
 		log: o.Log, hub: o.Hub, store: o.Store, static: o.Static, done: o.Done,
 		ingestToken: sha256.Sum256([]byte(o.IngestToken)), ingestOn: o.IngestToken != "",
+		devBootID: o.DevBootID,
 	}
 }
 
@@ -56,7 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/deployments/{id}", s.getDeployment)
 	mux.HandleFunc("POST /api/deployments", s.createDeployment)
 	mux.HandleFunc("GET /api/stats", s.stats)
-	mux.Handle("GET /", staticHandler(s.static))
+	mux.Handle("GET /", staticHandler(s.static, s.devBootID != ""))
 	return s.recoverer(s.logRequests(securityHeaders(mux)))
 }
 
@@ -203,6 +209,11 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		return rc.Flush()
 	}
 
+	if s.devBootID != "" {
+		if send("hello", []byte(`{"boot":"`+s.devBootID+`"}`)) != nil {
+			return
+		}
+	}
 	if b := s.hub.Latest(); b != nil {
 		if send("status", b) != nil {
 			return
@@ -297,11 +308,14 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 	})
 }
 
-func staticHandler(fsys fs.FS) http.Handler {
+func staticHandler(fsys fs.FS, dev bool) http.Handler {
 	files := http.FileServerFS(fsys)
+	cache := "no-cache" // fichiers non versionnés : on force la revalidation
+	if dev {
+		cache = "no-store" // en dev, toujours la dernière version du disque
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Fichiers non versionnés : on force la revalidation.
-		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Cache-Control", cache)
 		files.ServeHTTP(w, r)
 	})
 }

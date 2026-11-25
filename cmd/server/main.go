@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -63,11 +64,21 @@ func run() error {
 	}
 	go hub.Run(ctx, mock, cfg.PollInterval)
 
+	// En prod, le frontend est embarqué dans le binaire. En mode dev, il est lu
+	// sur le disque et toute modification recharge les navigateurs ouverts.
+	static, bootID := web.Static(), ""
+	if cfg.DevMode {
+		static = os.DirFS(cfg.StaticDir)
+		bootID = strconv.FormatInt(time.Now().UnixNano(), 36)
+		go live.WatchDir(ctx, cfg.StaticDir, 400*time.Millisecond, hub.PublishReload)
+		log.Warn("DEV MODE: frontend lu sur le disque, rechargement automatique actif", "dir", cfg.StaticDir)
+	}
+
 	srv := &http.Server{
 		Addr: cfg.ListenAddr,
 		Handler: api.New(api.Options{
 			Log: log, Hub: hub, Store: st, IngestToken: cfg.IngestToken,
-			Static: web.Static(), Done: ctx.Done(),
+			Static: static, Done: ctx.Done(), DevBootID: bootID,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second, // anti-slowloris
 		ReadTimeout:       10 * time.Second,

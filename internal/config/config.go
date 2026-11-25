@@ -17,6 +17,11 @@ type Config struct {
 	IngestToken  string        // INGEST_TOKEN ou INGEST_TOKEN_FILE ; vide = POST désactivé
 	LogLevel     string        // LOG_LEVEL : debug | info | warn | error
 
+	// Mode développement : frontend lu sur le disque + rechargement automatique
+	// du navigateur. Refusé hors APP_ENV=local.
+	DevMode   bool   // DEV_MODE=1
+	StaticDir string // STATIC_DIR (requis en mode dev), ex. web/static
+
 	// Informations publiques affichées dans les panneaux (pas des secrets).
 	GitHubRepo string // GITHUB_REPOSITORY (owner/repo)
 	PhobosURL  string // PHOBOS_URL
@@ -66,6 +71,18 @@ func Load() (Config, error) {
 	case "mock":
 	default:
 		return c, fmt.Errorf("DATA_SOURCE invalide: %q", c.DataSource)
+	}
+
+	c.DevMode = os.Getenv("DEV_MODE") == "1"
+	if c.DevMode {
+		// Garde-fou : le mode dev sert des fichiers du disque et ajoute des
+		// événements de rechargement ; il ne doit jamais tourner en prod.
+		if c.Environment != "local" {
+			return c, fmt.Errorf("DEV_MODE interdit avec APP_ENV=%s", c.Environment)
+		}
+		if c.StaticDir = os.Getenv("STATIC_DIR"); c.StaticDir == "" {
+			return c, fmt.Errorf("STATIC_DIR requis en mode dev")
+		}
 	}
 	return c, nil
 }
