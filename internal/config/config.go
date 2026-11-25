@@ -48,7 +48,7 @@ func Load() (Config, error) {
 		DataSource:  env("DATA_SOURCE", "mock"),
 		LogLevel:    env("LOG_LEVEL", "info"),
 		GitHubRepo:  env("GITHUB_REPOSITORY", "LeBaptouBaptiste/ContainerMaxxing"),
-		PhobosURL:   env("PHOBOS_URL", "https://containermaxxing.voyager3.fr"),
+		PhobosURL:   env("PHOBOS_URL", "https://containers2v-statique.voyager3.fr"),
 		AzureURL:    env("AZURE_URL", "https://cmx.voyager3.fr"),
 		CaaSApp:     env("CAAS_APP", "containermaxxing"),
 	}
