@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ContainerMaxxing — chaîne de déploiement</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="banner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>ContainerMaxxing</span>
+    </div>
+    <div class="banner-prod">
+      <span class="eyebrow">En production</span>
+      <span class="prod-tag" id="prod-tag">—</span>
+      <code class="prod-digest" id="prod-digest"></code>
+    </div>
+    <div class="banner-meta">
+      <span class="eyebrow">Page servie par</span>
+      <span class="env-badge" id="env-badge" data-env="">—</span>
+      <span class="source-badge" id="source-badge" hidden>données mock</span>
+    </div>
+    <div class="live" id="live" data-state="connecting" role="status" aria-live="polite">
+      <span class="live-dot" aria-hidden="true"></span><span id="live-text">connexion…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="pipeline-section" aria-labelledby="pipeline-title">
+      <div class="section-head">
+        <h2 id="pipeline-title">Chaîne de déploiement</h2>
+        <p class="hint">Cliquez sur une étape pour voir le détail. Mise à jour en direct.</p>
+      </div>
+      <div class="pipeline-groups" aria-hidden="true">
+        <span class="group group-local">Déploiement statique · phobos</span>
+        <span class="group group-ci">Déploiement continu · Azure</span>
+      </div>
+      <ol class="pipeline" id="pipeline"></ol>
+    </section>
+
+    <section class="history-section" aria-labelledby="history-title">
+      <div class="section-head">
+        <h2 id="history-title">Historique des déploiements</h2>
+        <p class="hint">Cochez deux versions pour les comparer.</p>
+      </div>
+      <div class="stats" id="stats"></div>
+
+      <figure class="chart-card">
+        <figcaption>
+          <span class="chart-title">Vulnérabilités par déploiement</span>
+          <span class="legend" id="cve-legend"></span>
+        </figcaption>
+        <div class="chart" id="cve-chart"></div>
+      </figure>
+
+      <div class="compare" id="compare" hidden></div>
+
+      <div class="table-wrap">
+        <table class="timeline" id="timeline">
+          <thead>
+            <tr>
+              <th scope="col"><span class="sr-only">Comparer</span></th>
+              <th scope="col">Version</th>
+              <th scope="col">Cible</th>
+              <th scope="col">Statut</th>
+              <th scope="col" class="num">Crit.</th>
+              <th scope="col" class="num">High</th>
+              <th scope="col" class="num">Med.</th>
+              <th scope="col">Dockle</th>
+              <th scope="col">Signée</th>
+              <th scope="col" class="num">Durée</th>
+              <th scope="col">Date</th>
+              <th scope="col">Run</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" aria-labelledby="drawer-title" hidden>
+    <header class="drawer-head">
+      <div>
+        <p class="eyebrow" id="drawer-eyebrow"></p>
+        <h2 id="drawer-title"></h2>
+      </div>
+      <button type="button" class="icon-btn" id="drawer-close" aria-label="Fermer le panneau">✕</button>
+    </header>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+</body>
+</html>
