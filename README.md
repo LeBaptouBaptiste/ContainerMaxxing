@@ -14,8 +14,8 @@ Image → phobos → Podman compose → GitHub → GitHub Actions → GHCR → C
 |---|-------|------|
 | 1 | App Go + frontend avec données mockées | ✅ |
 | 2 | Dockerfile distroless + scans locaux (Trivy, Dockle) | ⏳ |
-| 3 | compose : Postgres, Redis, Caddy, durcissement | 🟡 stockage PostgreSQL côté app fait ; compose de prod à faire |
-| 4 | Déploiement statique sur phobos (podman-compose + Nginx Proxy Manager) | ⏳ |
+| 3 | compose : app, Postgres, Redis, durcissement (reverse proxy : NPM existant sur beacon) | 🟡 PostgreSQL et cache Redis côté app faits ; compose de prod à faire |
+| 4 | Déploiement statique sur phobos (podman-compose, exposé par NPM sur beacon) | ⏳ |
 | 5 | Branchement GitHub API | ⏳ |
 | 6 | Workflow CI (build → Trivy → Dockle → GHCR (ghcr.io) → cosign → CaaS) | ⏳ |
 | 7 | Déploiement Azure + branchement GHCR / Container Apps | ⏳ |
@@ -30,6 +30,7 @@ internal/model/      types partagés + validation des entrées
 internal/source/     collecte de l'état (Mock aujourd'hui ; GitHub/GHCR/CaaS ensuite)
 internal/live/       polling périodique + diffusion SSE (hub)
 internal/store/      historique des déploiements : PostgreSQL (migrations/*.sql embarquées) ou mémoire
+internal/cache/      cache à durée de vie courte : Redis (partagé) ou mémoire, tolérant aux pannes
 internal/api/        routes HTTP, middlewares de sécurité
 web/src/             frontend en TypeScript strict, sans framework ni bundler
   ├─ chain.ts        chaîne animée : piste, nœuds, paquet, spotlight, focus automatique
@@ -138,6 +139,47 @@ Tests d'intégration sur une vraie base (schéma temporaire, supprimé à la fin
 TEST_DATABASE_URL='postgres://user:pass@host:5432/db?sslmode=disable' go test ./internal/store/
 ```
 
+### Cache Redis
+
+Le cache (`internal/cache`) se place devant les sources lentes ou soumises à quota. Il sert aujourd'hui à
+l'historique (liste, détail, stats lus depuis PostgreSQL) et servira aux API GitHub et Azure quand les vraies
+sources remplaceront le mock.
+
+- **Redis partagé** (`REDIS_URL`) : toutes les instances (conteneurs, réplicas Container Apps) partagent le même
+  cache, donc une API amont n'est appelée qu'une fois par durée de vie, quel que soit le nombre d'instances ou de
+  visiteurs. Sans `REDIS_URL`, cache en mémoire du processus.
+- **Une seule requête pour des appels simultanés** : plusieurs requêtes sur une clé absente ne déclenchent qu'un
+  seul appel à la source (`singleflight`), ce qui évite l'effet « ruée » à l'expiration.
+- **Invalidation par génération** : les clés de liste et de stats contiennent un numéro de génération, incrémenté
+  dans Redis à chaque nouveau déploiement. Le nouveau déploiement est visible immédiatement, sur toutes les instances.
+- **Tolérant aux pannes** : si Redis est arrêté ou lent (500 ms max par commande), l'app interroge directement la
+  source et continue de fonctionner ; l'incident est journalisé au plus une fois toutes les 30 s.
+
+Configuration recommandée côté infra (c'est un pur cache) : pas de persistance (`--save "" --appendonly no`),
+mémoire bornée avec éviction (`--maxmemory 64mb --maxmemory-policy allkeys-lru`), mot de passe
+(`--requirepass` via un secret), aucun port publié, réseau interne uniquement.
+
+### Exposition sur phobos (Nginx Proxy Manager sur beacon)
+
+Le sujet prévoyait un Caddy dans le compose. Nous utilisons à la place le **Nginx Proxy Manager déjà en place sur
+beacon**, qui gère déjà le TLS (Let's Encrypt) de nos sous-domaines : un second reverse proxy n'aurait rien apporté
+de plus, et un service de moins, c'est une surface d'attaque en moins.
+
+```
+Internet ─HTTPS─▶ NPM (beacon) ─HTTP─▶ app (phobos, seul port publié) ─▶ postgres, redis (réseau interne)
+                  containers2v-statique.voyager3.fr
+```
+
+- **L'app est le seul service qui publie un port** ; Postgres et Redis restent sur un réseau compose `internal: true`.
+- **Ce port n'est joignable que depuis beacon** : publié sur l'interface privée de phobos (pas `0.0.0.0`) et filtré
+  par le pare-feu sur l'IP de beacon.
+- **Le TLS s'arrête sur beacon** : le tronçon beacon → phobos est en HTTP clair, ce qui suppose un réseau privé (LAN ou
+  VPN) entre les deux machines. C'est un point à assumer et à mentionner en soutenance.
+- **Les en-têtes de sécurité viennent de l'app elle-même** (CSP, `nosniff`, `frame-ancestors`…), donc ils ne
+  dépendent pas du proxy. Côté NPM : activer « Force SSL », HSTS et HTTP/2.
+- **Le flux SSE passe à travers NPM sans réglage** : l'app envoie `X-Accel-Buffering: no` (nginx ne met pas le flux en
+  tampon) et un ping toutes les 20 s, sous le délai d'inactivité par défaut de nginx (60 s).
+
 ### API
 
 | Méthode | Route | Rôle |
@@ -229,6 +271,10 @@ curl -X POST http://localhost:8080/api/deployments \
 | **`DATABASE_URL` traité comme un secret** | Il contient le mot de passe : lu de préférence depuis un fichier (`DATABASE_URL_FILE`), jamais journalisé, et les erreurs de parsing ne le recopient pas. |
 | **Chiffrement vers la base** | Sur Azure, connexion en `sslmode=verify-full` (certificat du serveur vérifié avec les autorités de l'image distroless). Sur phobos, la base est sur un réseau compose interne sans port publié. |
 | **Pool borné et timeouts** | 5 connexions max, 5 s max par requête, 5 s pour se connecter : une base lente ne bloque pas l'app ni n'épuise ses ressources. |
+| **Cache non critique (fail-open)** | Redis est une optimisation, pas une dépendance : s'il tombe, l'app sert les données depuis la source. Un incident sur le cache ne devient pas une panne de l'application. |
+| **Cache borné** | Valeurs de plus de 1 Mio jamais mises en cache, cache mémoire limité à 1 000 entrées, Redis configuré avec `maxmemory` + éviction LRU : le cache ne peut pas épuiser la mémoire. |
+| **Erreurs jamais mises en cache** | Une réponse en erreur (API amont indisponible) n'est pas conservée : elle ne peut pas « empoisonner » le cache pendant toute sa durée de vie. |
+| **`REDIS_URL` traité comme un secret** | Il peut contenir le mot de passe : variante `REDIS_URL_FILE`, jamais journalisé. Sur Azure Cache for Redis, utiliser `rediss://` (TLS). |
 | **Contrôles de démo cloisonnés** | Les routes `/api/demo/*` modifient l'état du serveur : elles n'existent qu'avec la source mock, sans jeton seulement si `APP_ENV=local`, et ailleurs uniquement si `DEMO_TOKEN` (32 caractères min., comparaison à temps constant) est configuré. Avec les vraies sources, la page reste en lecture seule. |
 | **Protection CSRF des commandes** | Les commandes exigent `Content-Type: application/json` : une page d'un autre site ne peut pas les envoyer sans requête CORS préliminaire, que le serveur n'accepte pas. Un en-tête `Origin` différent de l'hôte servi est refusé. Corps limité à 1 Kio, champs inconnus refusés, scénarios en liste blanche. |
 | **Jeton de démo côté navigateur** | Saisi par le présentateur, jamais livré avec la page, conservé en `sessionStorage` (effacé à la fermeture de l'onglet) et retiré dès qu'il est refusé. |

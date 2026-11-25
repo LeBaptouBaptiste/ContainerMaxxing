@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/api"
+	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/cache"
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/config"
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/live"
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/source"
@@ -69,7 +70,27 @@ func run() error {
 	} else {
 		log.Warn("DATABASE_URL absent : historique en mémoire, perdu au redémarrage")
 	}
-	st := store.WithHook(base, hub.PublishDeployment)
+
+	// Cache des lectures (et, plus tard, des API GitHub/Azure). Redis s'il est
+	// configuré, sinon mémoire locale. Jamais bloquant : si Redis tombe, l'app
+	// interroge directement la source.
+	var kv cache.Cache = cache.NewMemory(1000)
+	if cfg.RedisURL != "" {
+		r, err := cache.OpenRedis(ctx, cfg.RedisURL, log)
+		if err != nil {
+			return err
+		}
+		defer r.Close()
+		kv = r
+		log.Info("cache partagé dans Redis")
+	} else {
+		log.Info("REDIS_URL absent : cache en mémoire du processus")
+	}
+	loader := cache.NewLoader(kv, log)
+
+	// Ordre des décorateurs : le cache est invalidé avant que le hook ne prévienne
+	// les navigateurs, qui relisent alors une liste à jour.
+	st := store.WithHook(store.WithCache(base, loader), hub.PublishDeployment)
 
 	mock := source.NewMock(cfg, st, version)
 	if err := mock.Seed(ctx); err != nil {

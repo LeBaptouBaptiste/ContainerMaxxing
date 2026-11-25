@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/cache"
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/model"
 )
 
@@ -96,6 +97,30 @@ func testStoreContract(t *testing.T, s Store) {
 func TestMemoryStore(t *testing.T) {
 	testStoreContract(t, NewMemory())
 }
+
+// Le cache ne doit rien changer au comportement observable : même contrat,
+// y compris les écritures visibles immédiatement (invalidation par génération).
+func TestCachedStore(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	testStoreContract(t, WithCache(NewMemory(), cache.NewLoader(cache.NewMemory(100), log)))
+}
+
+// Cache en panne (Redis arrêté) : l'historique reste servi normalement.
+func TestCachedStoreWithBrokenCache(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	testStoreContract(t, WithCache(NewMemory(), cache.NewLoader(failingCache{}, log)))
+}
+
+type failingCache struct{}
+
+func (failingCache) Get(context.Context, string) ([]byte, bool, error) {
+	return nil, false, errors.New("down")
+}
+func (failingCache) Set(context.Context, string, []byte, time.Duration) error {
+	return errors.New("down")
+}
+func (failingCache) Incr(context.Context, string) (int64, error) { return 0, errors.New("down") }
+func (failingCache) Close() error                                { return nil }
 
 // TestPostgresStore tourne seulement si TEST_DATABASE_URL est défini.
 // Il travaille dans un schéma temporaire, supprimé à la fin : jamais sur les vraies tables.
