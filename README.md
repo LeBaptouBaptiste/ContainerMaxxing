@@ -393,3 +393,4 @@ curl -X POST http://localhost:8080/api/deployments \
 | **Secrets en fichiers** | Montés dans `/run/secrets` et lus via `*_FILE` : jamais dans l'environnement ni dans `podman inspect`. |
 | **Redis protégé par ACL** | Mot de passe obligatoire, commandes dangereuses interdites à l'app (`FLUSHALL`, `CONFIG`, `KEYS`…), utilisateur de sonde limité à `PING`. |
 | **Port publié sur l'IP privée** | `APP_BIND` vaut `127.0.0.1` par défaut et doit être réglé sur l'IP privée de phobos : jamais `0.0.0.0`. |
+| **Réseaux séparés** | `backend` est `internal: true` : PostgreSQL et Redis n'ont aucun accès à Internet (impossible d'exfiltrer des données ou de télécharger un outil) et ne peuvent pas publier de port. Seule l'app est aussi sur `edge`, le réseau qui porte son port publié (et, plus tard, ses appels à GitHub/Azure). |
