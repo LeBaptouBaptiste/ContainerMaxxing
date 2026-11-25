@@ -72,7 +72,7 @@ func (d *Deployment) Validate() error {
 			add("steps[%d].name: invalide", i)
 		}
 		switch s.Status {
-		case StatusSuccess, StatusFailed, StatusPending:
+		case StatusSuccess, StatusFailed, StatusPending, StatusSkipped:
 		default:
 			add("steps[%d].status: invalide", i)
 		}

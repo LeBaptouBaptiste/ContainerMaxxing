@@ -18,8 +18,10 @@ import (
 // Mock simule une release qui parcourt toute la chaîne, étape par étape :
 // build et scans locaux → déploiement statique sur phobos → podman-compose →
 // tag GitHub → GitHub Actions → GHCR → Container Apps.
-// Chaque Poll fait avancer la release ; un run sur quatre échoue au scan
-// Trivy de la CI, et la prod Azure reste alors sur la version précédente.
+// Chaque Poll fait avancer la release d'un cran. Chaque release suit un
+// scénario (voir scenarios.go) qui décide si et où un contrôle de sécurité
+// la bloque. En mode démo, le présentateur peut mettre en pause, avancer step
+// par step et déclencher un scénario précis.
 type Mock struct {
 	mu      sync.Mutex
 	cfg     cfg
@@ -36,6 +38,10 @@ type Mock struct {
 	registry            []regEntry // plus récent d'abord
 	phobosTag           string
 	githubTag           string
+
+	paused   bool // progression figée (mode présentateur)
+	demo     bool // contrôles de démo exposés dans le snapshot
+	demoAuth bool // ces contrôles exigent un jeton
 }
 
 type cfg struct {
@@ -71,6 +77,7 @@ var phases = []phaseDef{
 	{model.StageActions, "Dockle lint", 5, 12, 1},
 	{model.StageGHCR, "Push GHCR", 10, 25, 1},
 	{model.StageGHCR, "Cosign sign", 4, 10, 1},
+	{model.StageCaaS, "cosign verify", 2, 5, 1},
 	{model.StageCaaS, "Deploy Container Apps", 30, 70, 2},
 	{model.StageCaaS, "Record deployment", 1, 3, 1},
 }
@@ -94,6 +101,7 @@ var (
 	pCIDockle    = phaseIndex("Dockle lint")
 	pPush        = phaseIndex("Push GHCR")
 	pSign        = phaseIndex("Cosign sign")
+	pVerify      = phaseIndex("cosign verify")
 	pDeploy      = phaseIndex("Deploy Container Apps")
 )
 
@@ -104,6 +112,7 @@ const (
 
 type mockRun struct {
 	number      int
+	scenario    string
 	tag, digest string
 	commit      string
 	startedAt   time.Time
@@ -113,7 +122,7 @@ type mockRun struct {
 	tick        int          // polls déjà passés sur la phase en cours
 	failAt      int          // -1 si la release réussit
 	med, low    int
-	ciHigh      int
+	ciCrit      int // CVE CRITICAL trouvées par le scan de la CI
 	findings    []model.Finding
 	finished    bool
 	failed      bool
@@ -214,7 +223,7 @@ func (m *Mock) Seed(ctx context.Context) error {
 	m.githubTag = m.prod.Tag
 
 	// La dernière release réussie est affichée comme terminée au démarrage.
-	m.run = m.newRun(m.prod.Tag, lastAt, -1)
+	m.run = m.newRun(m.prod.Tag, lastAt, ScenarioHealthy)
 	for i := range m.run.steps {
 		m.run.steps[i].Status = model.StatusSuccess
 		m.run.steps[i].DurationS = m.run.durations[i]
@@ -231,17 +240,25 @@ func (m *Mock) Poll(ctx context.Context) (model.Snapshot, error) {
 	return m.snapshot(), err
 }
 
+// advance fait progresser la release d'un poll (sauf en pause).
 func (m *Mock) advance(ctx context.Context) error {
-	now := m.now()
-	r := m.run
-	if r.finished {
-		if now.Before(m.nextRunAt) {
-			return nil
-		}
-		m.startRun(now)
+	if m.paused {
 		return nil
 	}
+	if m.run.finished {
+		if now := m.now(); !now.Before(m.nextRunAt) {
+			m.startRun(now, m.autoScenario())
+		}
+		return nil
+	}
+	return m.advanceRun(ctx)
+}
 
+// advanceRun compte un poll sur le step en cours et le termine quand il a duré
+// assez longtemps (certains steps, comme les builds, durent plusieurs polls).
+func (m *Mock) advanceRun(ctx context.Context) error {
+	now := m.now()
+	r := m.run
 	r.tick++
 	if r.tick < phases[r.cur].ticks {
 		return nil
@@ -253,6 +270,9 @@ func (m *Mock) advance(ctx context.Context) error {
 		s.Log = r.stepLog(r.cur, true, m.cfg.image)
 		r.finished, r.failed = true, true
 		m.nextRunAt = now.Add(pauseAfterFailure)
+		if r.failAt <= pHealth {
+			return m.recordPhobos(ctx, r)
+		}
 		return m.recordAzure(ctx, r)
 	}
 	s.Status = model.StatusSuccess
@@ -269,7 +289,12 @@ func (m *Mock) advance(ctx context.Context) error {
 		m.registry = append([]regEntry{{tag: r.tag, digest: r.digest}}, m.registry...)
 		m.registry = m.registry[:min(len(m.registry), 8)]
 	case pSign:
-		m.registry[0].signed = true
+		if r.scenario == ScenarioUnsigned {
+			// Le step de signature a été désactivé : l'image part non signée.
+			s.Status, s.DurationS = model.StatusSkipped, 0
+		} else {
+			m.registry[0].signed = true
+		}
 	case pDeploy:
 		m.prod = model.ProdInfo{Tag: r.tag, Digest: r.digest, Since: now}
 	}
@@ -289,7 +314,8 @@ func (m *Mock) advance(ctx context.Context) error {
 	return err
 }
 
-func (m *Mock) startRun(now time.Time) {
+// startRun démarre une nouvelle release (en abandonnant celle en cours).
+func (m *Mock) startRun(now time.Time, scenario string) {
 	m.runCount++
 	if m.runCount%3 == 0 {
 		m.minor, m.patch = m.minor+1, 0
@@ -297,24 +323,21 @@ func (m *Mock) startRun(now time.Time) {
 		m.patch++
 	}
 	tag := fmt.Sprintf("v%d.%d.%d", m.major, m.minor, m.patch)
-	failAt := -1
-	if m.runCount%4 == 2 {
-		failAt = pCITrivy
-	}
-	m.run = m.newRun(tag, now, failAt)
+	m.run = m.newRun(tag, now, scenario)
 	m.run.steps[0].Status = model.StatusRunning
 	m.run.steps[0].StartedAt = &now
 }
 
-func (m *Mock) newRun(tag string, at time.Time, failAt int) *mockRun {
+func (m *Mock) newRun(tag string, at time.Time, scenario string) *mockRun {
 	r := &mockRun{
-		number: m.runCount + 30, tag: tag, digest: fakeDigest(tag), commit: fakeDigest("commit" + tag)[7:47],
-		startedAt: at, failAt: failAt, med: m.rng.IntN(3), low: 2 + m.rng.IntN(6),
+		number: m.runCount + 30, scenario: scenario,
+		tag: tag, digest: fakeDigest(tag), commit: fakeDigest("commit" + tag)[7:47],
+		startedAt: at, failAt: failPhase(scenario), med: m.rng.IntN(3), low: 2 + m.rng.IntN(6),
 	}
-	if failAt == pCITrivy {
-		r.ciHigh = 1
+	if scenario == ScenarioCVE {
+		r.ciCrit = 1
 		r.findings = []model.Finding{{
-			ID: "MOCK-CVE-0001", Severity: "HIGH", Target: "golang.org/x/net (gobinary)",
+			ID: "MOCK-CVE-0001", Severity: "CRITICAL", Target: "golang.org/x/net (gobinary)",
 			Title: "Vulnérabilité fictive publiée après le scan local : la CI la détecte et bloque",
 		}}
 	}
@@ -341,6 +364,14 @@ func (m *Mock) recordPhobos(ctx context.Context, r *mockRun) error {
 		Tag: r.tag, Digest: r.digest, Target: "phobos", Status: model.StatusSuccess,
 		CVEMedium: r.med, DockleStatus: "pass", StartedAt: r.startedAt,
 	}
+	if r.failed {
+		d.Status = model.StatusFailed
+		if r.failAt == pLocalDockle {
+			d.DockleStatus = "warn"
+		} else if r.failAt < pLocalDockle {
+			d.DockleStatus = "skipped"
+		}
+	}
 	d.Steps, d.DurationS = r.deploymentSteps(0, pHealth)
 	_, err := m.store.CreateDeployment(ctx, d)
 	return err
@@ -349,7 +380,7 @@ func (m *Mock) recordPhobos(ctx context.Context, r *mockRun) error {
 func (m *Mock) recordAzure(ctx context.Context, r *mockRun) error {
 	d := model.Deployment{
 		Tag: r.tag, Digest: r.digest, Target: "azure", Status: model.StatusSuccess,
-		CVEHigh: r.ciHigh, CVEMedium: r.med, DockleStatus: "pass",
+		CVECritical: r.ciCrit, CVEMedium: r.med, DockleStatus: "pass",
 		Signed: r.steps[pSign].Status == model.StatusSuccess, RunURL: m.runURL(r),
 	}
 	if r.failed {
@@ -401,7 +432,7 @@ func (m *Mock) snapshot() model.Snapshot {
 	default:
 		run.Status, run.Stage, run.StepName = model.StatusRunning, phases[r.cur].stage, phases[r.cur].name
 	}
-	return model.Snapshot{
+	snap := model.Snapshot{
 		Environment: m.cfg.env,
 		Source:      "mock",
 		AppVersion:  m.version,
@@ -413,6 +444,12 @@ func (m *Mock) snapshot() model.Snapshot {
 			m.githubStage(now), m.actionsStage(now), m.ghcrStage(now), m.caasStage(now),
 		},
 	}
+	if m.demo {
+		snap.Demo = &model.DemoInfo{
+			AuthRequired: m.demoAuth, Paused: m.paused, Scenario: r.scenario, Scenarios: scenarioList,
+		}
+	}
+	return snap
 }
 
 // stageSteps renvoie les steps de l'étape et le statut qui en découle.
@@ -430,7 +467,7 @@ func (m *Mock) stageSteps(id model.StageID) ([]model.Step, model.Status) {
 	var done, failed, running int
 	for _, s := range steps {
 		switch s.Status {
-		case model.StatusSuccess:
+		case model.StatusSuccess, model.StatusSkipped:
 			done++
 		case model.StatusFailed:
 			failed++
@@ -459,6 +496,13 @@ func (r *mockRun) current() string {
 	return ""
 }
 
+func (r *mockRun) blockedBy() string {
+	if r.failed {
+		return phases[r.failAt].name
+	}
+	return ""
+}
+
 func (m *Mock) imageRef(tag string) string {
 	return m.cfg.image + ":" + tag
 }
@@ -476,13 +520,19 @@ func (m *Mock) imageStage(now time.Time) model.Stage {
 	switch status {
 	case model.StatusRunning:
 		st.Summary = r.current() + " · " + r.tag
+	case model.StatusFailed:
+		st.Summary = r.tag + " bloquée par " + r.blockedBy()
 	default:
 		st.Summary = r.tag + " · distroless · scannée"
+	}
+	user := "65532 (nonroot)"
+	if r.scenario == ScenarioDockle {
+		user = "0 (root) — USER absent du Dockerfile"
 	}
 	st.Fields = []model.Field{
 		{Label: "Image", Value: "containermaxxing:" + r.tag, Mono: true},
 		{Label: "Image de base", Value: "gcr.io/distroless/static:nonroot", Mono: true},
-		{Label: "Utilisateur", Value: "65532 (nonroot)"},
+		{Label: "Utilisateur", Value: user},
 		{Label: "Shell", Value: "aucun (distroless)"},
 		{Label: "Compilation", Value: "CGO_ENABLED=0 · -trimpath · -ldflags='-s -w'", Mono: true},
 		{Label: "Taille", Value: "≈ 9,6 Mo"},
@@ -490,10 +540,7 @@ func (m *Mock) imageStage(now time.Time) model.Stage {
 	if r.steps[0].Status == model.StatusSuccess {
 		st.Fields = append(st.Fields, model.Field{Label: "Digest", Value: r.digest, Mono: true})
 	}
-	st.Scans = []model.Scan{
-		m.trivyScan(r, pLocalTrivy, 0),
-		m.dockleScan(r, pLocalDockle),
-	}
+	st.Scans = []model.Scan{m.trivyScan(r, pLocalTrivy, 0), m.dockleScan(r, pLocalDockle)}
 	return st
 }
 
@@ -501,10 +548,12 @@ func (m *Mock) phobosStage(now time.Time) model.Stage {
 	r := m.run
 	steps, status := m.stageSteps(model.StagePhobos)
 	st := model.Stage{ID: model.StagePhobos, Label: "phobos", Status: status, UpdatedAt: now, Steps: steps}
-	switch status {
-	case model.StatusRunning:
+	switch {
+	case status == model.StatusRunning:
 		st.Summary = r.current() + " · " + r.tag
-	case model.StatusPending:
+	case status == model.StatusPending && r.failed:
+		st.Summary = "inchangé · sert " + m.phobosTag
+	case status == model.StatusPending:
 		st.Summary = "sert " + m.phobosTag + " · en attente"
 	default:
 		st.Summary = "serveur perso · " + m.phobosTag
@@ -525,11 +574,13 @@ func (m *Mock) composeStage(now time.Time) model.Stage {
 	steps, status := m.stageSteps(model.StageCompose)
 	st := model.Stage{ID: model.StageCompose, Label: "Podman compose", Status: status, UpdatedAt: now, Steps: steps}
 	health := "healthy"
-	switch status {
-	case model.StatusRunning:
+	switch {
+	case status == model.StatusRunning:
 		st.Summary = r.current() + "…"
 		health = "démarrage"
-	case model.StatusPending:
+	case status == model.StatusPending && r.failed:
+		st.Summary = "inchangé · 4/4 services healthy"
+	case status == model.StatusPending:
 		st.Summary = "4/4 services healthy · en attente"
 	default:
 		st.Summary = "4/4 services healthy"
@@ -550,10 +601,12 @@ func (m *Mock) githubStage(now time.Time) model.Stage {
 	steps, status := m.stageSteps(model.StageGitHub)
 	st := model.Stage{ID: model.StageGitHub, Label: "GitHub", Status: status, UpdatedAt: now, Steps: steps}
 	repoURL := "https://github.com/" + m.cfg.repo
-	switch status {
-	case model.StatusRunning:
+	switch {
+	case status == model.StatusRunning:
 		st.Summary = r.current() + " " + r.tag
-	case model.StatusPending:
+	case status == model.StatusPending && r.failed:
+		st.Summary = "inchangé · dernier tag " + m.githubTag
+	case status == model.StatusPending:
 		st.Summary = "dernier tag " + m.githubTag + " · en attente"
 	default:
 		st.Summary = fmt.Sprintf("tag %s · %s", m.githubTag, r.commit[:7])
@@ -576,12 +629,14 @@ func (m *Mock) actionsStage(now time.Time) model.Stage {
 	for _, s := range steps {
 		total += s.DurationS
 	}
-	switch status {
-	case model.StatusFailed:
-		st.Summary = fmt.Sprintf("run #%d échoué · %s", r.number, phases[r.failAt].name)
-	case model.StatusRunning:
+	switch {
+	case status == model.StatusFailed:
+		st.Summary = fmt.Sprintf("run #%d échoué · %s", r.number, r.blockedBy())
+	case status == model.StatusRunning:
 		st.Summary = fmt.Sprintf("run #%d · %s", r.number, r.current())
-	case model.StatusPending:
+	case status == model.StatusPending && r.failed:
+		st.Summary = "non déclenché"
+	case status == model.StatusPending:
 		st.Summary = "en attente du tag " + r.tag
 	default:
 		st.Summary = fmt.Sprintf("run #%d · build et scans OK", r.number)
@@ -593,7 +648,7 @@ func (m *Mock) actionsStage(now time.Time) model.Stage {
 		{Label: "Jobs", Value: "build-scan → publish (GHCR) → deploy (Container Apps)"},
 		{Label: "Durée du job", Value: fmtDuration(total)},
 	}
-	st.Scans = []model.Scan{m.trivyScan(r, pCITrivy, r.ciHigh), m.dockleScan(r, pCIDockle)}
+	st.Scans = []model.Scan{m.trivyScan(r, pCITrivy, r.ciCrit), m.dockleScan(r, pCIDockle)}
 	return st
 }
 
@@ -606,15 +661,17 @@ func (m *Mock) ghcrStage(now time.Time) model.Stage {
 	case status == model.StatusRunning:
 		st.Summary = r.current() + " · " + r.tag
 	case r.failed && status == model.StatusPending:
-		st.Summary = "inchangé · push bloqué par la CI"
+		st.Summary = "inchangé · push bloqué en amont"
 	case status == model.StatusPending:
 		st.Summary = "dernier tag " + top.tag + " · en attente"
+	case !top.signed:
+		st.Summary = top.tag + " · NON signée"
 	default:
 		st.Summary = top.tag + " · signée"
 	}
-	sig := "non signée"
+	sig := "non signée (step cosign sign ignoré)"
 	if top.signed {
-		sig = "cosign keyless (Sigstore · Fulcio + Rekor) — vérifiée"
+		sig = "cosign keyless (Sigstore · Fulcio + Rekor)"
 	}
 	var tags []string
 	for _, e := range m.registry[:min(len(m.registry), 5)] {
@@ -638,6 +695,8 @@ func (m *Mock) caasStage(now time.Time) model.Stage {
 	switch {
 	case status == model.StatusRunning:
 		st.Summary = r.current() + " · " + r.tag
+	case status == model.StatusFailed:
+		st.Summary = "déploiement refusé · " + m.prod.Tag + " reste en prod"
 	case r.failed && status == model.StatusPending:
 		st.Summary = "inchangé · " + m.prod.Tag + " reste en prod"
 	case status == model.StatusPending:
@@ -649,6 +708,7 @@ func (m *Mock) caasStage(now time.Time) model.Stage {
 		{Label: "Application", Value: m.cfg.caasApp, Mono: true},
 		{Label: "Révision active", Value: m.cfg.caasApp + "--" + strings.ReplaceAll(m.prod.Tag, ".", "-"), Mono: true},
 		{Label: "Image", Value: m.imageRef(m.prod.Tag) + "@" + m.prod.Digest[:19] + "…", Mono: true},
+		{Label: "Politique", Value: "signature cosign vérifiée avant chaque déploiement"},
 		{Label: "Trafic", Value: "100 % sur la dernière révision"},
 		{Label: "Réplicas", Value: "1 – 3 (scale HTTP)"},
 		{Label: "URL", Value: m.cfg.azureURL, Link: m.cfg.azureURL},
@@ -659,27 +719,30 @@ func (m *Mock) caasStage(now time.Time) model.Stage {
 	return st
 }
 
-func (m *Mock) trivyScan(r *mockRun, phase, high int) model.Scan {
+func (m *Mock) trivyScan(r *mockRun, phase, crit int) model.Scan {
 	sc := model.Scan{Tool: "Trivy", Status: model.StatusPending, Summary: "en attente"}
 	switch r.steps[phase].Status {
 	case model.StatusRunning:
 		sc.Status, sc.Summary = model.StatusRunning, "analyse en cours…"
 		return sc
 	case model.StatusPending:
+		if r.failed && r.failAt < phase {
+			sc.Summary = "non exécuté (release bloquée plus tôt)"
+		}
 		return sc
 	}
 	sc.Counts = []model.Count{
-		{Label: "CRITICAL", Value: 0, Level: "critical"},
-		{Label: "HIGH", Value: high, Level: "high"},
+		{Label: "CRITICAL", Value: crit, Level: "critical"},
+		{Label: "HIGH", Value: 0, Level: "high"},
 		{Label: "MEDIUM", Value: r.med, Level: "medium"},
 		{Label: "LOW", Value: r.low, Level: "low"},
 	}
 	for _, f := range r.findings {
-		if f.Severity != "HIGH" || high > 0 {
+		if f.Severity != "CRITICAL" || crit > 0 {
 			sc.Findings = append(sc.Findings, f)
 		}
 	}
-	if high > 0 {
+	if crit > 0 {
 		sc.Status, sc.Summary = model.StatusFailed, "échec : vulnérabilité HIGH/CRITICAL (--exit-code 1)"
 	} else {
 		sc.Status, sc.Summary = model.StatusSuccess, "aucune vulnérabilité HIGH/CRITICAL"
@@ -692,6 +755,17 @@ func (m *Mock) dockleScan(r *mockRun, phase int) model.Scan {
 	switch r.steps[phase].Status {
 	case model.StatusRunning:
 		sc.Status, sc.Summary = model.StatusRunning, "lint en cours…"
+	case model.StatusFailed:
+		sc.Status, sc.Summary = model.StatusFailed, "échec : CIS-DI-0001 (WARN, --exit-level warn)"
+		sc.Counts = []model.Count{
+			{Label: "FATAL", Value: 0, Level: "critical"},
+			{Label: "WARN", Value: 1, Level: "medium"},
+			{Label: "INFO", Value: 1, Level: "info"},
+		}
+		sc.Findings = []model.Finding{
+			{ID: "CIS-DI-0001", Severity: "WARN", Target: "image", Title: "Le conteneur tourne en root : aucun USER défini"},
+			{ID: "CIS-DI-0005", Severity: "INFO", Target: "image", Title: "Content trust non activé (compensé par la signature cosign)"},
+		}
 	case model.StatusSuccess:
 		sc.Status, sc.Summary = model.StatusSuccess, "PASS — CIS Docker Benchmark"
 		sc.Counts = []model.Count{
@@ -702,7 +776,7 @@ func (m *Mock) dockleScan(r *mockRun, phase int) model.Scan {
 		sc.Findings = []model.Finding{{ID: "CIS-DI-0005", Severity: "INFO", Target: "image", Title: "Content trust non activé (compensé par la signature cosign)"}}
 	default:
 		if r.failed && r.failAt < phase {
-			sc.Summary = "non exécuté (scan Trivy bloquant)"
+			sc.Summary = "non exécuté (release bloquée plus tôt)"
 		}
 	}
 	return sc
@@ -717,12 +791,15 @@ func (r *mockRun) stepLog(i int, failed bool, image string) string {
 	case "Trivy (local)":
 		return fmt.Sprintf("containermaxxing:%s (gobinary)\nTotal: %d (CRITICAL: 0, HIGH: 0, MEDIUM: %d, LOW: %d)", r.tag, r.med+r.low, r.med, r.low)
 	case "Trivy scan":
-		log := fmt.Sprintf("containermaxxing:%s (gobinary)\nTotal: %d (CRITICAL: 0, HIGH: %d, MEDIUM: %d, LOW: %d)", r.tag, r.ciHigh+r.med+r.low, r.ciHigh, r.med, r.low)
+		log := fmt.Sprintf("containermaxxing:%s (gobinary)\nTotal: %d (CRITICAL: %d, HIGH: 0, MEDIUM: %d, LOW: %d)", r.tag, r.ciCrit+r.med+r.low, r.ciCrit, r.med, r.low)
 		if failed {
-			log += "\nError: Process completed with exit code 1."
+			log += "\nMOCK-CVE-0001  CRITICAL  golang.org/x/net\nError: Process completed with exit code 1."
 		}
 		return log
 	case "Dockle (local)", "Dockle lint":
+		if failed {
+			return "WARN\t- CIS-DI-0001: Create a user for the container\n\t* Last user should not be root\nINFO\t- CIS-DI-0005: Enable Content trust for Docker\nError: exit status 1 (--exit-level warn)"
+		}
 		return "INFO\t- CIS-DI-0005: Enable Content trust for Docker\nPASS"
 	case "Connexion SSH":
 		return "ssh deploy@phobos — authentification par clé ed25519"
@@ -741,7 +818,15 @@ func (r *mockRun) stepLog(i int, failed bool, image string) string {
 	case "Push GHCR":
 		return fmt.Sprintf("The push refers to repository [%s]\n%s: digest: %s size: 1157", image, r.tag, r.digest)
 	case "Cosign sign":
+		if r.scenario == ScenarioUnsigned {
+			return "step ignoré : la signature a été désactivée dans le workflow"
+		}
 		return "Generating ephemeral keys...\nRetrieving signed certificate...\ntlog entry created\nPushing signature to: " + image
+	case "cosign verify":
+		if failed {
+			return fmt.Sprintf("cosign verify %s:%s \\\n  --certificate-identity-regexp '.github/workflows/ci.yml@refs/tags/v.*'\nError: no matching signatures\n→ déploiement refusé : image non signée par le workflow de CI", image, r.tag)
+		}
+		return fmt.Sprintf("Verification for %s:%s --\n  ✓ certificat émis pour .github/workflows/ci.yml@refs/tags/%s\n  ✓ entrée présente dans le journal de transparence Rekor", image, r.tag, r.tag)
 	case "Deploy Container Apps":
 		return "Revision provisioned and active, traffic 100%"
 	case "Record deployment":

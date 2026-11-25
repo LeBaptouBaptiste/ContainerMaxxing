@@ -26,6 +26,7 @@ const (
 	StatusFailed  Status = "failed"
 	StatusPending Status = "pending"
 	StatusUnknown Status = "unknown"
+	StatusSkipped Status = "skipped" // step ignoré (comme un step `if:` faux dans GitHub Actions)
 )
 
 // Field est une ligne clé/valeur du panneau de détails.
@@ -101,6 +102,22 @@ type RunInfo struct {
 	StartedAt time.Time `json:"started_at"`
 }
 
+// ScenarioInfo décrit un scénario de release déclenchable en mode démo.
+type ScenarioInfo struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+// DemoInfo indique au frontend si les contrôles de démo sont disponibles.
+// Absent du snapshot quand la démo est désactivée (sources réelles, prod).
+type DemoInfo struct {
+	AuthRequired bool           `json:"auth_required"` // jeton DEMO_TOKEN exigé
+	Paused       bool           `json:"paused"`
+	Scenario     string         `json:"scenario"` // scénario de la release courante
+	Scenarios    []ScenarioInfo `json:"scenarios"`
+}
+
 // Snapshot est l'état complet renvoyé par /api/status et poussé sur /api/stream.
 type Snapshot struct {
 	Environment string    `json:"environment"` // environnement qui sert la page : local | phobos | azure
@@ -108,6 +125,7 @@ type Snapshot struct {
 	AppVersion  string    `json:"app_version"`
 	Prod        ProdInfo  `json:"prod"`
 	Run         *RunInfo  `json:"run,omitempty"`
+	Demo        *DemoInfo `json:"demo,omitempty"`
 	Stages      []Stage   `json:"stages"`
 	GeneratedAt time.Time `json:"generated_at"`
 }
