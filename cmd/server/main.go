@@ -56,7 +56,20 @@ func run() error {
 	defer stop()
 
 	hub := live.NewHub(log, 100)
-	st := store.WithHook(store.NewMemory(), hub.PublishDeployment)
+
+	var base store.Store = store.NewMemory()
+	if cfg.DatabaseURL != "" {
+		pg, err := store.OpenPostgres(ctx, cfg.DatabaseURL, log)
+		if err != nil {
+			return err
+		}
+		defer pg.Close()
+		base = pg
+		log.Info("historique stocké dans PostgreSQL")
+	} else {
+		log.Warn("DATABASE_URL absent : historique en mémoire, perdu au redémarrage")
+	}
+	st := store.WithHook(base, hub.PublishDeployment)
 
 	mock := source.NewMock(cfg, st, version)
 	if err := mock.Seed(ctx); err != nil {

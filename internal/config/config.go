@@ -22,6 +22,10 @@ type Config struct {
 	DevMode   bool   // DEV_MODE=1
 	StaticDir string // STATIC_DIR (requis en mode dev), ex. web/static
 
+	// Base PostgreSQL de l'historique. Vide = stockage en mémoire, accepté
+	// uniquement en local (rien ne survit à un redémarrage).
+	DatabaseURL string // DATABASE_URL ou DATABASE_URL_FILE (contient le mot de passe)
+
 	// Contrôles de démo (scénarios, pause, pas à pas), disponibles uniquement
 	// avec la source mock : sans jeton en local, avec DEMO_TOKEN ailleurs.
 	DemoToken string // DEMO_TOKEN ou DEMO_TOKEN_FILE
@@ -55,6 +59,9 @@ func Load() (Config, error) {
 	if c.IngestToken != "" && len(c.IngestToken) < 32 {
 		return c, fmt.Errorf("INGEST_TOKEN trop court (32 caractères minimum)")
 	}
+	if c.DatabaseURL, err = secret("DATABASE_URL"); err != nil {
+		return c, err
+	}
 	if c.DemoToken, err = secret("DEMO_TOKEN"); err != nil {
 		return c, err
 	}
@@ -76,6 +83,10 @@ func Load() (Config, error) {
 	case "local", "phobos", "azure":
 	default:
 		return c, fmt.Errorf("APP_ENV invalide: %q", c.Environment)
+	}
+	if c.DatabaseURL == "" && c.Environment != "local" {
+		// Sur un vrai déploiement, perdre l'historique à chaque redémarrage n'est pas acceptable.
+		return c, fmt.Errorf("DATABASE_URL requis avec APP_ENV=%s", c.Environment)
 	}
 	switch c.DataSource {
 	case "mock":
