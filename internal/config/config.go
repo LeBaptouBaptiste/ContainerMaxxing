@@ -50,7 +50,7 @@ func Load() (Config, error) {
 		GitHubRepo:  env("GITHUB_REPOSITORY", "LeBaptouBaptiste/ContainerMaxxing"),
 		PhobosURL:   env("PHOBOS_URL", "https://containers2v-statique.voyager3.fr"),
 		AzureURL:    env("AZURE_URL", "https://containers2v.voyager3.fr"),
-		CaaSApp:     env("CAAS_APP", "containermaxxing"),
+		CaaSApp:     env("CAAS_APP", "containers2v"),
 	}
 	// GHCR impose des noms en minuscules.
 	c.GHCRImage = strings.ToLower(env("GHCR_IMAGE", "ghcr.io/"+c.GitHubRepo))
