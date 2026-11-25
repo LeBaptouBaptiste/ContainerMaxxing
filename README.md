@@ -14,8 +14,8 @@ Image → phobos → Podman compose → GitHub → GitHub Actions → GHCR → C
 |---|-------|------|
 | 1 | App Go + frontend avec données mockées | ✅ |
 | 2 | Dockerfile distroless + scans locaux (Trivy, Dockle) | ⏳ |
-| 3 | compose : Postgres, Redis, Caddy, durcissement | 🟡 PostgreSQL et cache Redis côté app faits ; compose de prod à faire |
-| 4 | Déploiement statique sur phobos (podman-compose + Nginx Proxy Manager) | ⏳ |
+| 3 | compose : app, Postgres, Redis, durcissement (reverse proxy : NPM existant sur beacon) | 🟡 PostgreSQL et cache Redis côté app faits ; compose de prod à faire |
+| 4 | Déploiement statique sur phobos (podman-compose, exposé par NPM sur beacon) | ⏳ |
 | 5 | Branchement GitHub API | ⏳ |
 | 6 | Workflow CI (build → Trivy → Dockle → GHCR (ghcr.io) → cosign → CaaS) | ⏳ |
 | 7 | Déploiement Azure + branchement GHCR / Container Apps | ⏳ |
@@ -158,6 +158,27 @@ sources remplaceront le mock.
 Configuration recommandée côté infra (c'est un pur cache) : pas de persistance (`--save "" --appendonly no`),
 mémoire bornée avec éviction (`--maxmemory 64mb --maxmemory-policy allkeys-lru`), mot de passe
 (`--requirepass` via un secret), aucun port publié, réseau interne uniquement.
+
+### Exposition sur phobos (Nginx Proxy Manager sur beacon)
+
+Le sujet prévoyait un Caddy dans le compose. Nous utilisons à la place le **Nginx Proxy Manager déjà en place sur
+beacon**, qui gère déjà le TLS (Let's Encrypt) de nos sous-domaines : un second reverse proxy n'aurait rien apporté
+de plus, et un service de moins, c'est une surface d'attaque en moins.
+
+```
+Internet ─HTTPS─▶ NPM (beacon) ─HTTP─▶ app (phobos, seul port publié) ─▶ postgres, redis (réseau interne)
+                  containers2v-statique.voyager3.fr
+```
+
+- **L'app est le seul service qui publie un port** ; Postgres et Redis restent sur un réseau compose `internal: true`.
+- **Ce port n'est joignable que depuis beacon** : publié sur l'interface privée de phobos (pas `0.0.0.0`) et filtré
+  par le pare-feu sur l'IP de beacon.
+- **Le TLS s'arrête sur beacon** : le tronçon beacon → phobos est en HTTP clair, ce qui suppose un réseau privé (LAN ou
+  VPN) entre les deux machines. C'est un point à assumer et à mentionner en soutenance.
+- **Les en-têtes de sécurité viennent de l'app elle-même** (CSP, `nosniff`, `frame-ancestors`…), donc ils ne
+  dépendent pas du proxy. Côté NPM : activer « Force SSL », HSTS et HTTP/2.
+- **Le flux SSE passe à travers NPM sans réglage** : l'app envoie `X-Accel-Buffering: no` (nginx ne met pas le flux en
+  tampon) et un ping toutes les 20 s, sous le délai d'inactivité par défaut de nginx (60 s).
 
 ### API
 

@@ -619,7 +619,7 @@ func (m *Mock) phobosStage(now time.Time) model.Stage {
 	st.Fields = []model.Field{
 		{Label: "Hôte", Value: "phobos (auto-hébergé)"},
 		{Label: "URL", Value: m.cfg.phobosURL, Link: m.cfg.phobosURL},
-		{Label: "Reverse proxy", Value: "Nginx Proxy Manager · TLS Let's Encrypt"},
+		{Label: "Reverse proxy", Value: "Nginx Proxy Manager sur beacon · TLS Let's Encrypt"},
 		{Label: "Runtime", Value: "Podman (rootless)"},
 		{Label: "Version déployée", Value: m.phobosTag},
 		{Label: "Mode", Value: "déploiement statique, sans CI"},
@@ -637,19 +637,18 @@ func (m *Mock) composeStage(now time.Time) model.Stage {
 		st.Summary = r.current() + "…"
 		health = "démarrage"
 	case status == model.StatusPending && r.failed:
-		st.Summary = "inchangé · 4/4 services healthy"
+		st.Summary = "inchangé · 3/3 services healthy"
 	case status == model.StatusPending:
-		st.Summary = "4/4 services healthy · en attente"
+		st.Summary = "3/3 services healthy · en attente"
 	default:
-		st.Summary = "4/4 services healthy"
+		st.Summary = "3/3 services healthy"
 	}
 	st.Fields = []model.Field{
-		{Label: "app", Value: health + " · distroless · read_only · cap_drop ALL"},
+		{Label: "app", Value: health + " · distroless · read_only · cap_drop ALL · seul service exposé (vers NPM)"},
 		{Label: "postgres", Value: health + " · réseau interne uniquement"},
 		{Label: "redis", Value: health + " · réseau interne uniquement"},
-		{Label: "caddy", Value: health + " · seul service exposé"},
 		{Label: "Volume", Value: "pgdata (nommé, persistant)", Mono: true},
-		{Label: "Réseaux", Value: "edge · backend (internal: true)", Mono: true},
+		{Label: "Réseaux", Value: "edge (app) · backend (internal: true)", Mono: true},
 	}
 	return st
 }
@@ -864,9 +863,9 @@ func (r *mockRun) stepLog(i int, failed bool, image string) string {
 	case "git pull":
 		return "Fast-forward main → " + r.commit[:7]
 	case "podman-compose up -d":
-		return "podman-compose up -d\n✔ postgres  ✔ redis  ✔ app  ✔ caddy"
+		return "podman-compose up -d\n✔ postgres  ✔ redis  ✔ app"
 	case "Healthchecks":
-		return "app: healthy\npostgres: healthy\nredis: healthy\ncaddy: healthy"
+		return "app: healthy\npostgres: healthy\nredis: healthy"
 	case "git tag":
 		return "git tag -s " + r.tag + " -m \"release " + r.tag + "\""
 	case "git push --tags":
