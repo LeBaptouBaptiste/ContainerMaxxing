@@ -27,6 +27,7 @@ services:
       PHOBOS_URL: ${PHOBOS_URL:-https://containers2v-statique.voyager3.fr}
       AZURE_URL: ${AZURE_URL:-https://containers2v.voyager3.fr}
       GHCR_IMAGE: ${GHCR_IMAGE:-ghcr.io/lebaptoubaptiste/containermaxxing}
+      CAAS_APP: ${CAAS_APP:-containers2v}
       DATABASE_URL_FILE: /run/secrets/database_url
       REDIS_URL_FILE: /run/secrets/redis_url
       INGEST_TOKEN_FILE: /run/secrets/ingest_token
