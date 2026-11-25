@@ -46,7 +46,12 @@ func Load() (Config, error) {
 		return c, fmt.Errorf("INGEST_TOKEN trop court (32 caractères minimum)")
 	}
 
-	if c.PollInterval, err = time.ParseDuration(env("POLL_INTERVAL", "5s")); err != nil {
+	// En mock, un poll = un step : 2 s donne une animation fluide pour la démo.
+	defPoll := "5s"
+	if c.DataSource == "mock" {
+		defPoll = "2s"
+	}
+	if c.PollInterval, err = time.ParseDuration(env("POLL_INTERVAL", defPoll)); err != nil {
 		return c, fmt.Errorf("POLL_INTERVAL: %w", err)
 	}
 	c.PollInterval = min(max(c.PollInterval, 2*time.Second), 60*time.Second)

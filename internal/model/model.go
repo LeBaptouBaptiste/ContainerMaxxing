@@ -88,12 +88,26 @@ type ProdInfo struct {
 	Since  time.Time `json:"since"`
 }
 
+// RunInfo décrit la release qui parcourt (ou vient de parcourir) la chaîne.
+// Le frontend s'en sert pour placer le focus sur l'étape en cours.
+type RunInfo struct {
+	Number    int       `json:"number"`
+	Tag       string    `json:"tag"`
+	Status    Status    `json:"status"`
+	Stage     StageID   `json:"stage,omitempty"` // étape en cours, ou étape en échec
+	StepName  string    `json:"step_name,omitempty"`
+	StepsDone int       `json:"steps_done"`
+	StepCount int       `json:"step_count"`
+	StartedAt time.Time `json:"started_at"`
+}
+
 // Snapshot est l'état complet renvoyé par /api/status et poussé sur /api/stream.
 type Snapshot struct {
 	Environment string    `json:"environment"` // environnement qui sert la page : local | phobos | azure
 	Source      string    `json:"source"`      // mock | live
 	AppVersion  string    `json:"app_version"`
 	Prod        ProdInfo  `json:"prod"`
+	Run         *RunInfo  `json:"run,omitempty"`
 	Stages      []Stage   `json:"stages"`
 	GeneratedAt time.Time `json:"generated_at"`
 }
