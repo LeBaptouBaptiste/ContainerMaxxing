@@ -5,6 +5,7 @@
 # - app : recompile/relance le serveur Go à chaque modification d'un .go ;
 #         sert le frontend depuis le disque (DEV_MODE) et recharge le navigateur.
 # - web : recompile web/src/*.ts vers web/static/js/ à chaque modification.
+# - db  : PostgreSQL 16 ; l'historique survit aux redémarrages (volume pgdata-dev).
 name: containermaxxing-dev
 
 services:
@@ -17,12 +18,16 @@ services:
       STATIC_DIR: /src/web/static
       APP_ENV: local
       GOFLAGS: -buildvcs=false
+      DATABASE_URL: postgres://containermaxxing@db:5432/containermaxxing?sslmode=disable
     ports:
       - "127.0.0.1:8080:8080" # loopback uniquement : pas exposé sur le réseau
     volumes:
       - .:/src
       - gocache:/root/.cache/go-build
       - gomod:/go/pkg/mod
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   web:
@@ -34,7 +39,26 @@ services:
       - node_modules:/src/node_modules # isolé du poste hôte
     restart: unless-stopped
 
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: containermaxxing
+      POSTGRES_USER: containermaxxing
+      # DEV UNIQUEMENT : pas de mot de passe, pour ne committer aucun secret.
+      # Acceptable ici car la base n'a aucun port publié : seule l'app du même
+      # projet compose peut la joindre. Le compose de prod utilise un secret.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "containermaxxing", "-d", "containermaxxing"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
 volumes:
   gocache:
   gomod:
   node_modules:
+  pgdata-dev:
