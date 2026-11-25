@@ -99,7 +99,7 @@ var (
 
 const (
 	pauseAfterSuccess = 30 * time.Second // laisse le temps au tour automatique des étapes
-	pauseAfterFailure = 12 * time.Second // garde le focus sur l'échec
+	pauseAfterFailure = 20 * time.Second // garde le focus sur l'échec, le temps de l'expliquer
 )
 
 type mockRun struct {
