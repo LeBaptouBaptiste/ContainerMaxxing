@@ -292,6 +292,16 @@ Configuration non secrète surchargeable dans un `.env` (non commité) à côté
 
 Démo de persistance : `podman-compose down && podman-compose up -d` → l'historique est intact.
 
+**Redémarrage automatique** : les services sont en `restart: always`. Podman ne relance pas au démarrage de la
+machine les conteneurs en `unless-stopped` ; les conteneurs `always` sont relancés par le service systemd
+`podman-restart`, à activer une fois pour l'utilisateur rootless (avec le linger, pour qu'il tourne sans session
+ouverte) :
+
+```sh
+sudo loginctl enable-linger cmaxxing
+systemctl --user enable --now podman-restart.service
+```
+
 ## Développement
 
 Ni Go ni Node ne sont nécessaires sur le poste, Docker suffit. L'environnement de dev reste lancé en
