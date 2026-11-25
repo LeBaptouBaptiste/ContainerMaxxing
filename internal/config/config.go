@@ -34,23 +34,27 @@ type Config struct {
 	DemoToken string // DEMO_TOKEN ou DEMO_TOKEN_FILE
 
 	// Informations publiques affichées dans les panneaux (pas des secrets).
-	GitHubRepo string // GITHUB_REPOSITORY (owner/repo)
-	PhobosURL  string // PHOBOS_URL
-	AzureURL   string // AZURE_URL
-	GHCRImage  string // GHCR_IMAGE (ex. ghcr.io/owner/repo, sans tag)
-	CaaSApp    string // CAAS_APP
+	GitHubRepo     string // GITHUB_REPOSITORY (owner/repo)
+	GitHubWorkflow string // GITHUB_WORKFLOW : fichier du workflow de CI suivi (défaut ci.yml)
+	GitHubBranch   string // GITHUB_BRANCH : branche principale (défaut main)
+	PhobosURL      string // PHOBOS_URL
+	AzureURL       string // AZURE_URL
+	GHCRImage      string // GHCR_IMAGE (ex. ghcr.io/owner/repo, sans tag)
+	CaaSApp        string // CAAS_APP
 }
 
 func Load() (Config, error) {
 	c := Config{
-		ListenAddr:  env("LISTEN_ADDR", ":8080"),
-		Environment: env("APP_ENV", "local"),
-		DataSource:  env("DATA_SOURCE", "mock"),
-		LogLevel:    env("LOG_LEVEL", "info"),
-		GitHubRepo:  env("GITHUB_REPOSITORY", "LeBaptouBaptiste/ContainerMaxxing"),
-		PhobosURL:   env("PHOBOS_URL", "https://containers2v-statique.voyager3.fr"),
-		AzureURL:    env("AZURE_URL", "https://containers2v.voyager3.fr"),
-		CaaSApp:     env("CAAS_APP", "containers2v"),
+		ListenAddr:     env("LISTEN_ADDR", ":8080"),
+		Environment:    env("APP_ENV", "local"),
+		DataSource:     env("DATA_SOURCE", "mock"),
+		LogLevel:       env("LOG_LEVEL", "info"),
+		GitHubRepo:     env("GITHUB_REPOSITORY", "LeBaptouBaptiste/ContainerMaxxing"),
+		GitHubWorkflow: env("GITHUB_WORKFLOW", "ci.yml"),
+		GitHubBranch:   env("GITHUB_BRANCH", "main"),
+		PhobosURL:      env("PHOBOS_URL", "https://containers2v-statique.voyager3.fr"),
+		AzureURL:       env("AZURE_URL", "https://containers2v.voyager3.fr"),
+		CaaSApp:        env("CAAS_APP", "containers2v"),
 	}
 	// GHCR impose des noms en minuscules.
 	c.GHCRImage = strings.ToLower(env("GHCR_IMAGE", "ghcr.io/"+c.GitHubRepo))
