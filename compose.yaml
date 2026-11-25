@@ -31,7 +31,8 @@ services:
       DATABASE_URL_FILE: /run/secrets/database_url
       REDIS_URL_FILE: /run/secrets/redis_url
       INGEST_TOKEN_FILE: /run/secrets/ingest_token
-    secrets: [database_url, redis_url, ingest_token]
+      GITHUB_TOKEN_FILE: /run/secrets/github_token
+    secrets: [database_url, redis_url, ingest_token, github_token]
     ports:
       # Interface privée de phobos uniquement (jamais 0.0.0.0), pour le NPM de beacon.
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-11262}:8080"
@@ -143,3 +144,5 @@ secrets:
     file: ./secrets/redis_url
   ingest_token:
     file: ./secrets/ingest_token
+  github_token:
+    file: ./secrets/github_token

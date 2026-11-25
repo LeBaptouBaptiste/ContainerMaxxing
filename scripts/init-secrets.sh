@@ -12,6 +12,7 @@
 #   redis_acl           liste de contrôle d'accès Redis (utilisateurs, droits)
 #   redis_url           URL Redis de l'app (contient le mot de passe)
 #   ingest_token        jeton Bearer de POST /api/deployments (CI)
+#   github_token        jeton GitHub en lecture seule (vide par défaut, à remplir pour DATA_SOURCE=live)
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -46,6 +47,10 @@ user healthcheck on nopass -@all +ping
 "
 write redis_url "redis://:$REDIS_PASSWORD@redis:6379/0"
 write ingest_token "$(rand)"
+# Jeton GitHub (source live) : fourni par un humain, pas généré. Vide = pas de jeton
+# (suffisant en DATA_SOURCE=mock) ; y coller un jeton fine-grained en lecture seule
+# (Actions, Contents, Metadata : Read) avant de passer en DATA_SOURCE=live.
+write github_token ""
 
 chmod 644 secrets/*
 echo "==> OK. Ne jamais committer ni copier ce dossier hors du serveur."
