@@ -267,6 +267,31 @@ sh scripts/init-secrets.sh
 - **Montés comme fichiers** dans `/run/secrets` (variantes `*_FILE`) et non passés en variables d'environnement :
   ils n'apparaissent ni dans `podman inspect` ni dans l'environnement des processus.
 
+### Lancer la pile
+
+```sh
+sh scripts/init-secrets.sh          # une seule fois
+podman-compose up -d --build        # construit l'image et démarre app + postgres + redis
+podman-compose ps
+```
+
+Configuration non secrète surchargeable dans un `.env` (non commité) à côté de `compose.yaml` :
+
+| Variable | Défaut | Rôle |
+|----------|--------|------|
+| `APP_BIND` | `127.0.0.1` | interface où l'app publie son port : l'**IP privée de phobos**, joignable par beacon (jamais `0.0.0.0`) |
+| `APP_PORT` | `8080` | port publié, cible du proxy host NPM |
+| `APP_ENV` | `phobos` | environnement affiché dans le bandeau |
+| `DATA_SOURCE` | `mock` | source des données |
+| `APP_IMAGE` | `localhost/containermaxxing:latest` | nom de l'image construite (ou image GHCR) |
+
+- **App** : construite depuis le `Dockerfile`, seul service qui publie un port.
+- **PostgreSQL 16** : volume nommé `pgdata` (survit à `podman-compose down`, pas à `down -v`), authentification
+  `scram-sha-256`, mot de passe lu depuis le secret.
+- **Redis 7** : pur cache (pas de persistance, 64 Mo, éviction LRU), accès contrôlé par le fichier ACL.
+
+Démo de persistance : `podman-compose down && podman-compose up -d` → l'historique est intact.
+
 ## Développement
 
 Ni Go ni Node ne sont nécessaires sur le poste, Docker suffit. L'environnement de dev reste lancé en
