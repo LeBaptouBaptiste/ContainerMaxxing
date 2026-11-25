@@ -380,3 +380,16 @@ curl -X POST http://localhost:8080/api/deployments \
 | **Contrôles de démo cloisonnés** | Les routes `/api/demo/*` modifient l'état du serveur : elles n'existent qu'avec la source mock, sans jeton seulement si `APP_ENV=local`, et ailleurs uniquement si `DEMO_TOKEN` (32 caractères min., comparaison à temps constant) est configuré. Avec les vraies sources, la page reste en lecture seule. |
 | **Protection CSRF des commandes** | Les commandes exigent `Content-Type: application/json` : une page d'un autre site ne peut pas les envoyer sans requête CORS préliminaire, que le serveur n'accepte pas. Un en-tête `Origin` différent de l'hôte servi est refusé. Corps limité à 1 Kio, champs inconnus refusés, scénarios en liste blanche. |
 | **Jeton de démo côté navigateur** | Saisi par le présentateur, jamais livré avec la page, conservé en `sessionStorage` (effacé à la fermeture de l'onglet) et retiré dès qu'il est refusé. |
+
+### Étape 3 — compose de prod
+
+| Choix | Pourquoi |
+|-------|----------|
+| **Aucun conteneur en root** | L'app tourne en `65532`, PostgreSQL en `70`, Redis en `999` dès le démarrage : les entrypoints n'ont pas besoin de passer par root puis de changer d'utilisateur. Un processus compromis n'a pas les droits root dans le conteneur. |
+| **`cap_drop: [ALL]`** | Aucune capacité Linux (changer de propriétaire, ouvrir un port < 1024, contourner les droits de fichiers…) : c'est possible parce qu'aucun service ne démarre en root. |
+| **`no-new-privileges`** | Un binaire setuid ne peut pas élever ses privilèges, même s'il en existait un dans l'image. |
+| **`read_only: true`** | Système de fichiers en lecture seule pour les trois services : un attaquant ne peut ni déposer un outil ni modifier un binaire. Seuls restent inscriptibles le volume `pgdata` et des `tmpfs` en mémoire (socket et fichiers temporaires de PostgreSQL). |
+| **Limites de ressources** | Mémoire (`mem_limit`) et nombre de processus (`pids_limit`) bornés par service : une fuite mémoire ou une « fork bomb » reste confinée à son conteneur. |
+| **Secrets en fichiers** | Montés dans `/run/secrets` et lus via `*_FILE` : jamais dans l'environnement ni dans `podman inspect`. |
+| **Redis protégé par ACL** | Mot de passe obligatoire, commandes dangereuses interdites à l'app (`FLUSHALL`, `CONFIG`, `KEYS`…), utilisateur de sonde limité à `PING`. |
+| **Port publié sur l'IP privée** | `APP_BIND` vaut `127.0.0.1` par défaut et doit être réglé sur l'IP privée de phobos : jamais `0.0.0.0`. |
