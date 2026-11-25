@@ -57,17 +57,23 @@ le stage Go avant la compilation.
 ### La chaîne animée
 
 C'est l'élément central de la page. Une release est représentée par un **paquet** (l'image et son tag) qui
-avance sur une piste de 7 nœuds. Chaque nœud a un anneau qui se remplit au fil des steps de l'étape, et un
-**spotlight** sous la piste détaille l'étape mise en avant : ses steps avec chronomètre, un journal façon
-terminal et les infos clés (scans Trivy/Dockle, digest, signature…).
+avance sur une piste de 7 nœuds ; chaque nœud a un anneau qui se remplit au fil des steps de l'étape.
 
-Le focus change tout seul, selon trois modes :
+Une **caméra** suit la release : elle zoome sur l'étape en cours (le nœud en grand à gauche) et fait glisser à
+droite un panneau de détails (steps avec chronomètre, infos clés, scans Trivy/Dockle, journal façon terminal).
+Quand l'étape est terminée, la caméra **dézoome** sur la vue d'ensemble, le paquet avance, puis elle **rezoome**
+sur l'étape suivante. Techniquement, c'est un simple `transform: translate() scale()` CSS sur la scène, calculé
+en TypeScript à partir de la position du nœud (`chain.ts`).
+
+Le cadrage change tout seul, selon trois modes :
 
 | Mode | Quand | Comportement |
 |------|-------|--------------|
-| suivi en direct | une release est en cours ou vient d'échouer | le focus suit l'étape active (`run.stage` du snapshot) |
-| visite automatique | rien ne tourne | les étapes défilent toutes les 5 s (barre de progression sous le spotlight) |
-| sélection manuelle | clic sur un nœud, ◀ ▶ ou flèches du clavier | le focus est figé, puis le suivi auto reprend après 20 s |
+| suivi en direct | une release est en cours ou vient d'échouer | la caméra suit l'étape active (`run.stage` du snapshot) |
+| visite automatique | rien ne tourne | vue d'ensemble, puis zoom sur chaque étape tour à tour (7 s par plan) |
+| sélection manuelle | clic sur un nœud, ◀ ▶ ou flèches du clavier | la caméra reste sur cette étape, puis le suivi auto reprend après 20 s |
+
+Le bouton « Vue d'ensemble » (touche `O`) désactive le zoom et garde toute la chaîne à l'écran.
 
 ### Mode démo et présentateur
 
