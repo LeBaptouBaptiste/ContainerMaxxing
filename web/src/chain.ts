@@ -11,7 +11,7 @@
 // glisse à droite. Quand le focus change, on dézoome sur la vue d'ensemble,
 // on laisse le paquet avancer, puis on zoome sur la nouvelle étape.
 
-import { $, el, statusBadge, fmtDur, LEVEL_COLOR, STATUS_LABEL, stageIcon, reducedMotion } from "./dom.js";
+import { $, el, statusBadge, fmtDur, LEVEL_COLOR, STATUS_LABEL, stageIcon, reducedMotion, typingIn } from "./dom.js";
 import type { RunInfo, Snapshot, Stage, StageID, Step, Status } from "./types.js";
 
 const TOUR_MS = 7000;   // durée de chaque plan pendant la visite automatique
@@ -68,14 +68,32 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
     render();
   });
   $("#chain-overview").addEventListener("click", toggleOverview);
+  $("#chain-fullscreen").addEventListener("click", toggleFullscreen);
+  // Synchronise le bouton, y compris quand on sort du plein écran avec Échap.
+  document.addEventListener("fullscreenchange", () => {
+    $("#chain-fullscreen").setAttribute("aria-pressed", String(document.fullscreenElement !== null));
+  });
   document.addEventListener("keydown", (e) => {
-    const target = e.target as Element | null;
-    if (!$("#drawer").hidden || target?.closest("input, textarea, select") || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!$("#drawer").hidden || typingIn(e) || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "ArrowLeft") step(-1);
     else if (e.key === "ArrowRight") step(1);
     else if (e.key === "o" || e.key === "O") toggleOverview();
+    else if (e.key === "f" || e.key === "F") toggleFullscreen();
   });
-  window.addEventListener("resize", () => applyCamera(s.framed, false));
+
+  // Plein écran du navigateur : nécessite un geste de l'utilisateur (clic ou touche).
+  function toggleFullscreen(): void {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+      return;
+    }
+    if (!s.zoom) toggleOverview(); // le plein écran se fait en mode scène
+    document.documentElement.requestFullscreen().catch(() => { /* refusé par le navigateur */ });
+  }
+  // Le cadre change de taille (fenêtre, plein écran, passage page ↔ scène) :
+  // on recalcule le cadrage sans animation.
+  new ResizeObserver(() => applyCamera(s.framed, false)).observe(viewport);
+  setStageLayout();
 
   const ids = (): StageID[] => s.snap?.stages.map((st) => st.id) ?? [];
 
@@ -103,8 +121,18 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
 
   function toggleOverview(): void {
     s.zoom = !s.zoom;
-    $("#chain-overview").setAttribute("aria-pressed", String(!s.zoom));
+    setStageLayout();
     frame();
+  }
+
+  // Zoom actif → mise en page « scène » : la chaîne occupe toute la fenêtre.
+  // Vue d'ensemble → page classique, avec l'historique sous la chaîne.
+  function setStageLayout(): void {
+    document.body.classList.toggle("stage", s.zoom);
+    const btn = $("#chain-overview");
+    btn.setAttribute("aria-pressed", String(!s.zoom));
+    btn.textContent = s.zoom ? "Vue d'ensemble" : "Mode scène";
+    btn.title = s.zoom ? "Revenir à la page avec l'historique (O)" : "Chaîne en plein écran avec zoom (O)";
   }
 
   // --- logique de focus ------------------------------------------------------

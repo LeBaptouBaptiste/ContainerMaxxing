@@ -45,7 +45,8 @@
           <span class="chain-mode" id="chain-mode"></span>
           <button type="button" class="icon-btn" id="chain-prev" aria-label="Étape précédente">◀</button>
           <button type="button" class="btn" id="chain-auto" aria-pressed="true">❚❚ Suivi auto</button>
-          <button type="button" class="btn" id="chain-overview" aria-pressed="false" title="Vue d'ensemble sans zoom (O)">Vue d'ensemble</button>
+          <button type="button" class="btn" id="chain-overview" aria-pressed="false">Vue d'ensemble</button>
+          <button type="button" class="btn" id="chain-fullscreen" aria-pressed="false" title="Plein écran du navigateur (F)">Plein écran</button>
           <button type="button" class="icon-btn" id="chain-next" aria-label="Étape suivante">▶</button>
         </div>
       </div>
@@ -60,9 +61,7 @@
           <div class="demo-controls">
             <button type="button" class="icon-btn" id="demo-back" aria-label="Reculer d'un step (Maj+Espace)" title="Reculer d'un step (Maj+Espace)">⏮</button>
             <button type="button" class="btn" id="demo-play" title="Pause / lecture (P)">❚❚ Pause</button>
-            <button type="button" class="icon-btn" id="demo-fwd" aria-label="Avancer d'un step (Espace)" title="Avancer d'un step (Espace)">⏭</button>
-            <button type="button" class="btn" id="demo-present" aria-pressed="false" title="Mode présentation (F)">Présentation</button>
-          </div>
+            <button type="button" class="icon-btn" id="demo-fwd" aria-label="Avancer d'un step (Espace)" title="Avancer d'un step (Espace)">⏭</button>          </div>
         </div>
         <form class="demo-auth" id="demo-auth" hidden>
           <label for="demo-token">Jeton de démo</label>
@@ -71,7 +70,7 @@
         </form>
         <p class="demo-msg" id="demo-msg" role="status"></p>
         <p class="demo-keys" aria-hidden="true">
-          <kbd>Espace</kbd> avancer · <kbd>Maj</kbd>+<kbd>Espace</kbd> reculer · <kbd>P</kbd> pause · <kbd>1</kbd>–<kbd>4</kbd> scénarios · <kbd>F</kbd> présentation · <kbd>O</kbd> vue d'ensemble · <kbd>←</kbd><kbd>→</kbd> étapes
+          <kbd>Espace</kbd> avancer · <kbd>Maj</kbd>+<kbd>Espace</kbd> reculer · <kbd>P</kbd> pause · <kbd>1</kbd>–<kbd>4</kbd> scénarios · <kbd>F</kbd> plein écran · <kbd>O</kbd> vue d'ensemble · <kbd>←</kbd><kbd>→</kbd> étapes
         </p>
       </div>
       <p class="replay-banner" id="replay-banner" hidden>

@@ -374,18 +374,34 @@ kbd {
   border-left: 2px solid var(--warning); background: var(--surface-2); font-size: 13px; color: var(--text-2);
 }
 
-/* ---------- mode présentation (projecteur) ---------- */
-body.presenter .history-section, body.presenter .banner-meta .source-badge { display: none; }
-body.presenter main { max-width: none; padding: 20px 32px; }
-body.presenter .demo-keys { display: none; }
-body.presenter .run-tag { font-size: 28px; }
-body.presenter .node-label { font-size: 15px; }
-body.presenter .viewport { height: max(540px, calc(100vh - 300px)); }
-body.presenter .zp-head h3 { font-size: 28px; }
-body.presenter .zp-sub { font-size: 15px; }
-body.presenter .spot-steps li .status { font-size: 15px; }
-body.presenter .zp-col .fields { font-size: 14.5px; }
-body.presenter .zp-term .terminal { height: max(140px, calc(100vh - 720px)); font-size: 13.5px; }
+/* ---------- mode scène : la chaîne occupe toute la fenêtre ----------
+   Actif dès que le zoom l'est (suivi en direct, visite, sélection) ;
+   « Vue d'ensemble » revient à la page classique avec l'historique. */
+body.stage { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+body.stage .banner { flex: none; }
+body.stage main { flex: 1; min-height: 0; width: 100%; max-width: none; margin: 0; padding: 0; display: flex; }
+body.stage .history-section { display: none; }
+body.stage .chain {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  border: 0; border-radius: 0; padding: 16px 28px 0;
+}
+body.stage .viewport { flex: 1; min-height: 0; height: auto; margin: 0 -28px; border-radius: 0; }
+body.stage .demo-bar, body.stage .replay-banner { margin-top: -10px; }
+body.stage .run-tag { font-size: 26px; }
+body.stage .node-label { font-size: 15px; }
+body.stage .zoom-panel { top: 18px; right: 28px; bottom: 24px; display: flex; flex-direction: column; }
+body.stage .zp-head h3 { font-size: 28px; }
+body.stage .zp-sub { font-size: 15px; }
+body.stage .spot-steps li .status { font-size: 15px; }
+body.stage .zp-col .fields { font-size: 14.5px; }
+body.stage .zp-grid { flex: 1; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+body.stage .zp-term { display: flex; flex-direction: column; min-height: 0; }
+body.stage .zp-term .terminal { flex: 1; height: auto; min-height: 120px; font-size: 13px; }
+/* en plein écran du navigateur, on ne garde que l'essentiel */
+:fullscreen .demo-keys { display: none; }
+
+/* page classique (sans zoom) : le cadre s'ajuste à la chaîne */
+body:not(.stage) .viewport { height: auto; }
 
 @media (max-width: 1100px) {
   .banner { grid-template-columns: 1fr auto; gap: 10px 20px; }

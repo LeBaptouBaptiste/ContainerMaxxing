@@ -5,15 +5,14 @@
 //   navigateurs ouverts voient la même chose).
 // - Reculer : rejoue côté client les états déjà reçus de la release en cours,
 //   sans rien changer sur le serveur.
-// - Présentation : agrandit la chaîne et masque l'historique pour le projecteur.
 //
+// (Le plein écran et le passage page ↔ scène sont gérés par chain.ts.)
 // Les contrôles n'apparaissent que si le serveur les active (snapshot.demo).
 
-import { $, el } from "./dom.js";
+import { $, el, typingIn } from "./dom.js";
 import type { DemoInfo, Snapshot } from "./types.js";
 
 const TOKEN_KEY = "cmx-demo-token";   // sessionStorage : effacé à la fermeture de l'onglet
-const PRESENT_KEY = "cmx-presenter";
 
 export interface Demo {
   /** Reçoit chaque snapshot en direct ; décide quoi afficher (direct ou rejeu). */
@@ -32,15 +31,6 @@ export function createDemo({ display }: { display: (snap: Snapshot, frozen: bool
   const msg = $("#demo-msg");
   const auth = $<HTMLFormElement>("#demo-auth");
   const tokenInput = $<HTMLInputElement>("#demo-token");
-
-  // --- présentation (local au navigateur) -----------------------------------------
-
-  function setPresenter(on: boolean): void {
-    document.body.classList.toggle("presenter", on);
-    $("#demo-present").setAttribute("aria-pressed", String(on));
-    sessionStorage.setItem(PRESENT_KEY, on ? "1" : "");
-  }
-  setPresenter(sessionStorage.getItem(PRESENT_KEY) === "1");
 
   // --- commandes serveur ------------------------------------------------------------
 
@@ -104,7 +94,6 @@ export function createDemo({ display }: { display: (snap: Snapshot, frozen: bool
   $("#demo-back").addEventListener("click", back);
   $("#demo-fwd").addEventListener("click", forward);
   $("#demo-play").addEventListener("click", togglePlay);
-  $("#demo-present").addEventListener("click", () => setPresenter(!document.body.classList.contains("presenter")));
   $("#replay-live").addEventListener("click", () => { s.view = null; show(); });
   auth.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -118,15 +107,13 @@ export function createDemo({ display }: { display: (snap: Snapshot, frozen: bool
 
   document.addEventListener("keydown", (e) => {
     if (bar.hidden || !$("#drawer").hidden || e.ctrlKey || e.metaKey || e.altKey) return;
-    if ((e.target as Element | null)?.closest("input, textarea, select")) return;
+    if (typingIn(e)) return;
     const scenarios = s.live?.demo?.scenarios ?? [];
     if (e.key === " ") {
       e.preventDefault(); // pas de défilement ni de clic sur le bouton focalisé
       if (e.shiftKey) back(); else forward();
     } else if (e.key === "p" || e.key === "P") {
       togglePlay();
-    } else if (e.key === "f" || e.key === "F") {
-      setPresenter(!document.body.classList.contains("presenter"));
     } else if (/^[1-9]$/.test(e.key)) {
       const sc = scenarios[Number(e.key) - 1];
       if (sc) trigger(sc.id);

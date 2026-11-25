@@ -88,6 +88,10 @@ export const fmtDate = (iso: string): string =>
 export const shortDigest = (d: string): string => (d ? d.replace("sha256:", "").slice(0, 12) : "");
 export const pct = (x: number): string => `${(x * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %`;
 
+/** Vrai si la touche est tapée dans un champ de saisie (raccourcis désactivés). */
+export const typingIn = (e: Event): boolean =>
+  e.target instanceof Element && e.target.closest("input, textarea, select") !== null;
+
 export const reducedMotion = (): boolean => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export async function getJSON<T>(url: string): Promise<T> {
