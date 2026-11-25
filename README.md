@@ -31,11 +31,28 @@ internal/source/     collecte de l'état (Mock aujourd'hui ; GitHub/GHCR/CaaS en
 internal/live/       polling périodique + diffusion SSE (hub)
 internal/store/      historique des déploiements (mémoire aujourd'hui ; PostgreSQL à l'étape 3)
 internal/api/        routes HTTP, middlewares de sécurité
-web/static/          frontend HTML/CSS/JS sans dépendance, embarqué dans le binaire (go:embed)
-  ├─ chain.js        chaîne animée : piste, nœuds, paquet, spotlight, focus automatique
-  ├─ app.js          bandeau, flux SSE, panneau de détails, historique, comparaison
-  └─ dom.js          helpers DOM partagés (création sûre d'éléments, icônes, formats)
+web/src/             frontend en TypeScript strict, sans framework ni bundler
+  ├─ chain.ts        chaîne animée : piste, nœuds, paquet, spotlight, focus automatique
+  ├─ app.ts          bandeau, flux SSE, panneau de détails, historique, comparaison
+  ├─ dom.ts          helpers DOM partagés (création sûre d'éléments, icônes, formats)
+  └─ types.ts        types des réponses de l'API, alignés sur internal/model
+web/static/          index.html + app.css ; js/ = sortie de tsc (non commitée)
+                     le tout embarqué dans le binaire (go:embed)
+scripts/             boucles de rechargement à chaud de l'environnement de dev
+compose.dev.yaml     environnement de dev (jamais en prod)
 ```
+
+Le frontend est compilé par `tsc` (TypeScript 7), seule dépendance npm, et uniquement en dépendance de dev : le
+navigateur ne reçoit que le JS compilé, aucun code tiers. **Le build doit donc compiler le TypeScript avant
+`go build`**, sinon `web/static/js/` est vide et la page ne s'affiche pas :
+
+```sh
+npm ci && npm run build   # web/src/*.ts → web/static/js/*.js
+go build ./cmd/server     # embarque web/static/ dans le binaire
+```
+
+Pour le Dockerfile, il faut donc un stage `node` (`npm ci && npm run build`) dont on copie `web/static/js` dans
+le stage Go avant la compilation.
 
 ### La chaîne animée
 
@@ -81,19 +98,35 @@ défaut en mock, soit ~45 s par release, suivies de 30 s de pause). Chaque relea
 local) : le focus reste 20 s sur l'échec, et GHCR et Container Apps restent sur la version précédente, ce qui
 illustre la *quality gate*.
 
-## Lancer en local
+## Développement
 
-Go n'est pas nécessaire sur le poste, Docker/Podman suffit :
+Ni Go ni Node ne sont nécessaires sur le poste, Docker suffit. L'environnement de dev reste lancé en
+permanence et **recharge le navigateur tout seul** à chaque modification :
 
 ```sh
-docker run --rm -p 127.0.0.1:8080:8080 -v "$PWD:/src" -w /src golang:1.25-alpine go run ./cmd/server
-# puis http://localhost:8080
-
-# tests
-docker run --rm -v "$PWD:/src" -w /src golang:1.25-alpine go test ./...
+docker compose -f compose.dev.yaml up -d      # puis http://localhost:8080
+docker compose -f compose.dev.yaml logs -f    # suivre les recompilations
+docker compose -f compose.dev.yaml down       # arrêter
 ```
 
-Avec Go installé : `go run ./cmd/server` et `go test ./...`. Variables disponibles : voir [`.env.example`](.env.example).
+| Modification | Ce qui se passe |
+|--------------|-----------------|
+| `web/src/*.ts` | le conteneur `web` recompile (`tsc`), le serveur voit le nouveau JS et envoie `reload` aux navigateurs |
+| `web/static/*.css`, `index.html` | rechargement direct, sans compilation |
+| `*.go` | le conteneur `app` recompile et relance le serveur ; la page se recharge à la reconnexion |
+
+En cas d'erreur de typage ou de compilation, la dernière version valide reste servie et l'erreur s'affiche dans
+les logs. Le mode dev (`DEV_MODE=1`) lit le frontend sur le disque au lieu du binaire ; il est **refusé au
+démarrage si `APP_ENV` n'est pas `local`**, pour ne jamais tourner en prod par erreur.
+
+Tests et vérification des types :
+
+```sh
+docker run --rm -v "$PWD:/src" -w /src golang:1.25-alpine go test ./...
+docker compose -f compose.dev.yaml exec web npm run typecheck
+```
+
+Variables disponibles : voir [`.env.example`](.env.example).
 
 Tester l'ingestion :
 
@@ -114,7 +147,7 @@ curl -X POST http://localhost:8080/api/deployments \
 | Choix | Pourquoi |
 |-------|----------|
 | **Go, binaire unique, bibliothèque standard uniquement** | Aucune dépendance tierce à cette étape → surface de chaîne d'approvisionnement minimale. Le binaire statique (`CGO_ENABLED=0`) tournera dans une image *distroless* sans libc ni shell. |
-| **Frontend sans framework ni CDN, embarqué via `go:embed`** | Pas de `node_modules` à auditer, pas de script tiers chargé à l'exécution, rien à monter à côté du binaire. Toute la page vient de la même origine. |
+| **Frontend TypeScript sans framework ni CDN, embarqué via `go:embed`** | Une seule dépendance npm (`typescript`), en dépendance de dev uniquement et en version exacte figée dans `package-lock.json` : elle sert à compiler, rien de tiers n'est envoyé au navigateur. Le mode strict détecte à la compilation les accès à des champs absents de l'API. Pas de script chargé depuis un autre domaine, rien à monter à côté du binaire : toute la page vient de la même origine. |
 | **Polling côté serveur** | Les jetons GitHub/Azure restent sur le serveur ; le frontend ne reçoit que des données publiques déjà filtrées. Le cache Redis (étape 3) évitera de dépasser les quotas d'API quel que soit le nombre de visiteurs. |
 | **Aucun secret dans le code ni dans le frontend** | Toute la configuration passe par l'environnement. Les secrets supportent la variante `*_FILE` (ex. `INGEST_TOKEN_FILE`) pour être montés comme fichiers plutôt qu'exposés dans `podman inspect`. |
 | **Content-Security-Policy stricte** | `default-src 'self'`, pas de script ni de style inline, `frame-ancestors 'none'` (anti-clickjacking), `object-src 'none'`, `base-uri 'none'`. Complétée par `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, COOP/CORP. |
