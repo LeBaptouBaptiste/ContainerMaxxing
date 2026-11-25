@@ -241,6 +241,32 @@ Docker Content Trust, remplacé par la signature cosign). Résultat actuel : **0
 > branches 1.26/1.27 : Go 1.25 n'est plus maintenu. Correction appliquée : passage à **Go 1.27.4** (et mise à jour des
 > dépendances), plutôt qu'une exception dans `.trivyignore`.
 
+## Déploiement sur phobos (podman-compose)
+
+### Secrets
+
+Les secrets du compose sont des **fichiers** dans `secrets/` (ignoré par git), générés une fois sur le serveur :
+
+```sh
+sh scripts/init-secrets.sh
+```
+
+| Fichier | Contenu |
+|---------|---------|
+| `postgres_password` | mot de passe du rôle PostgreSQL |
+| `database_url` | DSN de l'app (contient ce mot de passe) |
+| `redis_acl` | liste de contrôle d'accès Redis : l'app a un mot de passe et aucune commande dangereuse (`FLUSHALL`, `CONFIG`, `KEYS`…) ; l'utilisateur `healthcheck` ne peut faire que `PING` |
+| `redis_url` | URL Redis de l'app (contient le mot de passe) |
+| `ingest_token` | jeton Bearer de `POST /api/deployments` |
+
+- **Valeurs aléatoires** de 256 bits (`/dev/urandom`), en hexadécimal pour pouvoir figurer dans une URL sans échappement.
+- **Jamais écrasés** : relancer le script conserve les secrets existants (sinon la base existante deviendrait
+  inaccessible).
+- **Droits** : dossier en `700` (fermé aux autres utilisateurs du serveur), fichiers lisibles par les utilisateurs
+  non-root des conteneurs.
+- **Montés comme fichiers** dans `/run/secrets` (variantes `*_FILE`) et non passés en variables d'environnement :
+  ils n'apparaissent ni dans `podman inspect` ni dans l'environnement des processus.
+
 ## Développement
 
 Ni Go ni Node ne sont nécessaires sur le poste, Docker suffit. L'environnement de dev reste lancé en
