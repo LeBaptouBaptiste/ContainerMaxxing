@@ -1,0 +1,40 @@
+# Environnement de développement (local uniquement, jamais en prod).
+#   docker compose -f compose.dev.yaml up -d     → http://localhost:8080
+#   docker compose -f compose.dev.yaml logs -f   → suivre les recompilations
+#
+# - app : recompile/relance le serveur Go à chaque modification d'un .go ;
+#         sert le frontend depuis le disque (DEV_MODE) et recharge le navigateur.
+# - web : recompile web/src/*.ts vers web/static/js/ à chaque modification.
+name: containermaxxing-dev
+
+services:
+  app:
+    image: golang:1.25-alpine
+    working_dir: /src
+    command: sh scripts/dev.sh
+    environment:
+      DEV_MODE: "1"
+      STATIC_DIR: /src/web/static
+      APP_ENV: local
+      GOFLAGS: -buildvcs=false
+    ports:
+      - "127.0.0.1:8080:8080" # loopback uniquement : pas exposé sur le réseau
+    volumes:
+      - .:/src
+      - gocache:/root/.cache/go-build
+      - gomod:/go/pkg/mod
+    restart: unless-stopped
+
+  web:
+    image: node:24-alpine
+    working_dir: /src
+    command: sh scripts/web-dev.sh
+    volumes:
+      - .:/src
+      - node_modules:/src/node_modules # isolé du poste hôte
+    restart: unless-stopped
+
+volumes:
+  gocache:
+  gomod:
+  node_modules:
