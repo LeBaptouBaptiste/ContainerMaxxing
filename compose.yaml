@@ -30,6 +30,12 @@ services:
       # Interface privée de phobos uniquement (jamais 0.0.0.0), pour le NPM de beacon.
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8080"
     depends_on: [postgres, redis]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 128
     restart: unless-stopped
 
   postgres:
@@ -43,6 +49,17 @@ services:
     volumes:
       # Volume nommé : survit à `podman-compose down` (mais pas à `down -v`).
       - pgdata:/var/lib/postgresql/data
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
+    # Démarre directement en utilisateur postgres (70) : pas besoin de root ni des
+    # capacités (CHOWN, SETUID…) que l'entrypoint utiliserait pour changer d'utilisateur.
+    user: "70:70"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 200
     restart: unless-stopped
 
   redis:
@@ -62,6 +79,13 @@ services:
       - --maxmemory-policy
       - allkeys-lru
     secrets: [redis_acl]
+    # Démarre directement en utilisateur redis (999) : aucune capacité nécessaire.
+    user: "999:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    pids_limit: 64
     restart: unless-stopped
 
 volumes:
