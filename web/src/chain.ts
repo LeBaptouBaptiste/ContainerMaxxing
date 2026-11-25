@@ -19,8 +19,8 @@ const RESUME_MS = 20000;
 const MAX_FIELDS = 5;
 
 // Caméra (doivent correspondre aux transitions CSS de .world et .zoom-panel).
-const OUT_MS = 700;     // dézoom vers la vue d'ensemble
-const HOLD_MS = 500;    // vue d'ensemble : le paquet avance vers l'étape suivante
+const OUT_MS = 450;     // dézoom vers la vue d'ensemble
+const HOLD_MS = 250;    // vue d'ensemble : le paquet avance vers l'étape suivante
 const ZOOM = 3;         // grossissement maximal
 const FRAME_X = 0.23;   // position horizontale du nœud cadré (part de la largeur)
 const FRAME_FILL = 0.84; // part de la hauteur occupée par le bloc cadré (paquet → statut)

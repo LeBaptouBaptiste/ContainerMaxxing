@@ -154,12 +154,12 @@ main { max-width: 1440px; margin: 0 auto; padding: 28px; display: grid; gap: 40p
 .viewport { position: relative; height: 540px; overflow: hidden; border-radius: 10px; }
 .world {
   position: relative; transform-origin: 0 0;
-  /* zoom avant : 0,8 s ; doit rester cohérent avec OUT_MS / HOLD_MS dans chain.ts */
-  transition: transform 0.8s cubic-bezier(0.65, 0, 0.35, 1);
+  /* zoom avant : 0,55 s ; doit rester cohérent avec OUT_MS / HOLD_MS dans chain.ts */
+  transition: transform 0.55s cubic-bezier(0.65, 0, 0.35, 1);
 }
-.viewport[data-zoom="out"] .world { transition-duration: 0.7s; }
+.viewport[data-zoom="out"] .world { transition-duration: 0.45s; }
 .world.no-anim { transition: none; }
-.groups, .node, .packet { transition: opacity 0.4s var(--ease), left 0.8s var(--ease); }
+.groups, .node, .packet { transition: opacity 0.3s var(--ease), left 0.5s var(--ease); }
 /* pendant le zoom, seule l'étape cadrée reste visible */
 .viewport[data-zoom="in"] .groups,
 .viewport[data-zoom="in"] .node[data-focus="false"],
@@ -170,12 +170,12 @@ main { max-width: 1440px; margin: 0 auto; padding: 28px; display: grid; gap: 40p
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
   padding: 18px 20px; overflow-y: auto;
   opacity: 0; transform: translateX(32px); pointer-events: none;
-  transition: opacity 0.25s var(--ease), transform 0.25s var(--ease);
+  transition: opacity 0.18s var(--ease), transform 0.18s var(--ease);
 }
 /* le panneau arrive pendant la fin du zoom avant */
 .viewport[data-zoom="in"] .zoom-panel {
   opacity: 1; transform: none; pointer-events: auto;
-  transition: opacity 0.45s var(--ease) 0.35s, transform 0.45s var(--ease) 0.35s;
+  transition: opacity 0.3s var(--ease) 0.22s, transform 0.3s var(--ease) 0.22s;
 }
 .zp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 16px; }
 .zp-head h3 { margin: 2px 0 4px; font-size: 21px; font-weight: 600; }
