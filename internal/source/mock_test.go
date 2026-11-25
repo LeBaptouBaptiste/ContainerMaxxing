@@ -55,6 +55,12 @@ func TestMockRuns(t *testing.T) {
 			if snap.Stages[idx].Status != model.StatusRunning {
 				t.Fatalf("étape active %s en statut %s", run.Stage, snap.Stages[idx].Status)
 			}
+			// Le focus n'avance que si toutes les étapes précédentes sont terminées.
+			for _, prev := range snap.Stages[:idx] {
+				if prev.Status != model.StatusSuccess {
+					t.Fatalf("focus sur %s alors que %s est %s", run.Stage, prev.ID, prev.Status)
+				}
+			}
 		}
 		if run.Status == model.StatusFailed {
 			sawFailure = true

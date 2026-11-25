@@ -416,12 +416,14 @@ func (m *Mock) snapshot() model.Snapshot {
 }
 
 // stageSteps renvoie les steps de l'étape et le statut qui en découle.
-// L'étape Actions regroupe tous les steps du job CI (jusqu'au déploiement).
+// Le workflow CI est découpé en jobs enchaînés (needs:) : build-scan → étape
+// Actions, publish → étape GHCR, deploy → étape Container Apps. Une étape est
+// donc terminée avant que la suivante démarre.
 func (m *Mock) stageSteps(id model.StageID) ([]model.Step, model.Status) {
 	r := m.run
 	var steps []model.Step
 	for i, p := range phases {
-		if p.stage == id || (id == model.StageActions && i >= pCIFirst) {
+		if p.stage == id {
 			steps = append(steps, r.steps[i])
 		}
 	}
@@ -582,14 +584,14 @@ func (m *Mock) actionsStage(now time.Time) model.Stage {
 	case model.StatusPending:
 		st.Summary = "en attente du tag " + r.tag
 	default:
-		st.Summary = fmt.Sprintf("run #%d réussi · %s", r.number, fmtDuration(total))
+		st.Summary = fmt.Sprintf("run #%d · build et scans OK", r.number)
 	}
 	st.Fields = []model.Field{
 		{Label: "Workflow", Value: ".github/workflows/ci.yml", Mono: true},
 		{Label: "Run", Value: fmt.Sprintf("#%d", r.number), Link: m.runURL(r)},
 		{Label: "Déclencheur", Value: "push du tag " + r.tag},
-		{Label: "Auth Azure", Value: "OIDC (federated credentials), sans secret"},
-		{Label: "Durée", Value: fmtDuration(total)},
+		{Label: "Jobs", Value: "build-scan → publish (GHCR) → deploy (Container Apps)"},
+		{Label: "Durée du job", Value: fmtDuration(total)},
 	}
 	st.Scans = []model.Scan{m.trivyScan(r, pCITrivy, r.ciHigh), m.dockleScan(r, pCIDockle)}
 	return st
@@ -650,6 +652,7 @@ func (m *Mock) caasStage(now time.Time) model.Stage {
 		{Label: "Trafic", Value: "100 % sur la dernière révision"},
 		{Label: "Réplicas", Value: "1 – 3 (scale HTTP)"},
 		{Label: "URL", Value: m.cfg.azureURL, Link: m.cfg.azureURL},
+		{Label: "Auth Azure", Value: "OIDC (federated credentials), sans secret"},
 		{Label: "Base de données", Value: "Azure Database for PostgreSQL (Flexible Server)"},
 		{Label: "En prod depuis", Value: m.prod.Since.Format("02/01/2006 15:04:05")},
 	}
