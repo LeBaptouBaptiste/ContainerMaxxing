@@ -22,6 +22,7 @@ import (
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/api"
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/cache"
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/config"
+	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/github"
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/live"
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/source"
 	"github.com/LeBaptouBaptiste/ContainerMaxxing/internal/store"
@@ -92,17 +93,33 @@ func run() error {
 	// les navigateurs, qui relisent alors une liste à jour.
 	st := store.WithHook(store.WithCache(base, loader), hub.PublishDeployment)
 
-	mock := source.NewMock(cfg, st, version)
-	if err := mock.Seed(ctx); err != nil {
-		return fmt.Errorf("seed: %w", err)
-	}
+	// Source des données : simulation (mock, avec mode démo) ou API GitHub (live).
+	var src source.Source
 	var demo api.DemoController
-	if cfg.DemoEnabled() {
-		mock.EnableDemo(cfg.DemoToken != "")
-		demo = mock
-		log.Info("demo controls enabled", "token_required", cfg.DemoToken != "")
+	switch cfg.DataSource {
+	case "live":
+		gh, err := github.New(github.Options{Repo: cfg.GitHubRepo, Token: cfg.GitHubToken, Loader: loader, Log: log})
+		if err != nil {
+			return err
+		}
+		if cfg.GitHubToken == "" {
+			log.Warn("GITHUB_TOKEN absent : quota de 60 requêtes/h, essai local uniquement")
+		}
+		src = source.NewGitHub(cfg, gh, version)
+		log.Info("données en direct depuis l'API GitHub", "repo", cfg.GitHubRepo, "workflow", cfg.GitHubWorkflow)
+	default:
+		mock := source.NewMock(cfg, st, version)
+		if err := mock.Seed(ctx); err != nil {
+			return fmt.Errorf("seed: %w", err)
+		}
+		if cfg.DemoEnabled() {
+			mock.EnableDemo(cfg.DemoToken != "")
+			demo = mock
+			log.Info("demo controls enabled", "token_required", cfg.DemoToken != "")
+		}
+		src = mock
 	}
-	go hub.Run(ctx, mock, cfg.PollInterval)
+	go hub.Run(ctx, src, cfg.PollInterval)
 
 	// En prod, le frontend est embarqué dans le binaire. En mode dev, il est lu
 	// sur le disque et toute modification recharge les navigateurs ouverts.
