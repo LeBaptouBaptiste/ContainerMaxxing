@@ -284,6 +284,7 @@ sh scripts/init-secrets.sh
 | `redis_acl` | liste de contrôle d'accès Redis : l'app a un mot de passe et aucune commande dangereuse (`FLUSHALL`, `CONFIG`, `KEYS`…) ; l'utilisateur `healthcheck` ne peut faire que `PING` |
 | `redis_url` | URL Redis de l'app (contient le mot de passe) |
 | `ingest_token` | jeton Bearer de `POST /api/deployments` |
+| `github_token` | jeton GitHub en lecture seule pour `DATA_SOURCE=live` : **créé vide** (pas de jeton, suffisant en `mock`), à remplir à la main avec un jeton *fine-grained* (Actions, Contents, Metadata : Read) |
 
 - **Valeurs aléatoires** de 256 bits (`/dev/urandom`), en hexadécimal pour pouvoir figurer dans une URL sans échappement.
 - **Jamais écrasés** : relancer le script conserve les secrets existants (sinon la base existante deviendrait
