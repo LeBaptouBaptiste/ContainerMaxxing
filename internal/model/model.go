@@ -13,7 +13,7 @@ const (
 	StageCompose StageID = "compose"
 	StageGitHub  StageID = "github"
 	StageActions StageID = "actions"
-	StageACR     StageID = "acr"
+	StageGHCR    StageID = "ghcr"
 	StageCaaS    StageID = "caas"
 )
 

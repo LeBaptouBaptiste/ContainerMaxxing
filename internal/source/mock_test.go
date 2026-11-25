@@ -13,7 +13,7 @@ import (
 
 var chainOrder = []model.StageID{
 	model.StageImage, model.StagePhobos, model.StageCompose, model.StageGitHub,
-	model.StageActions, model.StageACR, model.StageCaaS,
+	model.StageActions, model.StageGHCR, model.StageCaaS,
 }
 
 // Fait tourner le mock sur plusieurs releases avec une horloge simulée :
@@ -23,7 +23,7 @@ var chainOrder = []model.StageID{
 func TestMockRuns(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemory()
-	m := NewMock(config.Config{Environment: "local", GitHubRepo: "o/r", ACRName: "a", CaaSApp: "c"}, st, "test")
+	m := NewMock(config.Config{Environment: "local", GitHubRepo: "o/r", GHCRImage: "ghcr.io/o/r", CaaSApp: "c"}, st, "test")
 	clock := time.Now().Add(-time.Hour) // 400 polls × 2 s restent dans le passé (Validate refuse le futur)
 	m.now = func() time.Time { return clock }
 	if err := m.Seed(ctx); err != nil {

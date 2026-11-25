@@ -21,7 +21,7 @@ type Config struct {
 	GitHubRepo string // GITHUB_REPOSITORY (owner/repo)
 	PhobosURL  string // PHOBOS_URL
 	AzureURL   string // AZURE_URL
-	ACRName    string // ACR_NAME
+	GHCRImage  string // GHCR_IMAGE (ex. ghcr.io/owner/repo, sans tag)
 	CaaSApp    string // CAAS_APP
 }
 
@@ -34,9 +34,10 @@ func Load() (Config, error) {
 		GitHubRepo:  env("GITHUB_REPOSITORY", "LeBaptouBaptiste/ContainerMaxxing"),
 		PhobosURL:   env("PHOBOS_URL", "https://containermaxxing.voyager3.fr"),
 		AzureURL:    env("AZURE_URL", "https://cmx.voyager3.fr"),
-		ACRName:     env("ACR_NAME", "containermaxxing"),
 		CaaSApp:     env("CAAS_APP", "containermaxxing"),
 	}
+	// GHCR impose des noms en minuscules.
+	c.GHCRImage = strings.ToLower(env("GHCR_IMAGE", "ghcr.io/"+c.GitHubRepo))
 
 	var err error
 	if c.IngestToken, err = secret("INGEST_TOKEN"); err != nil {

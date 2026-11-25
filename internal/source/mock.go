@@ -17,7 +17,7 @@ import (
 
 // Mock simule une release qui parcourt toute la chaîne, étape par étape :
 // build et scans locaux → déploiement statique sur phobos → podman-compose →
-// tag GitHub → GitHub Actions → ACR → Container Apps.
+// tag GitHub → GitHub Actions → GHCR → Container Apps.
 // Chaque Poll fait avancer la release ; un run sur quatre échoue au scan
 // Trivy de la CI, et la prod Azure reste alors sur la version précédente.
 type Mock struct {
@@ -33,16 +33,16 @@ type Mock struct {
 	nextRunAt           time.Time
 	run                 *mockRun
 	prod                model.ProdInfo
-	acr                 []acrEntry // plus récent d'abord
+	registry            []regEntry // plus récent d'abord
 	phobosTag           string
 	githubTag           string
 }
 
 type cfg struct {
-	env, repo, phobosURL, azureURL, acr, caasApp string
+	env, repo, phobosURL, azureURL, image, caasApp string
 }
 
-type acrEntry struct {
+type regEntry struct {
 	tag, digest string
 	signed      bool
 }
@@ -69,8 +69,8 @@ var phases = []phaseDef{
 	{model.StageActions, "Build image", 45, 90, 2},
 	{model.StageActions, "Trivy scan", 20, 40, 1},
 	{model.StageActions, "Dockle lint", 5, 12, 1},
-	{model.StageACR, "Push ACR", 10, 25, 1},
-	{model.StageACR, "Cosign sign", 4, 10, 1},
+	{model.StageGHCR, "Push GHCR", 10, 25, 1},
+	{model.StageGHCR, "Cosign sign", 4, 10, 1},
 	{model.StageCaaS, "Deploy Container Apps", 30, 70, 2},
 	{model.StageCaaS, "Record deployment", 1, 3, 1},
 }
@@ -92,7 +92,7 @@ var (
 	pCIFirst     = phaseIndex("Checkout")
 	pCITrivy     = phaseIndex("Trivy scan")
 	pCIDockle    = phaseIndex("Dockle lint")
-	pPush        = phaseIndex("Push ACR")
+	pPush        = phaseIndex("Push GHCR")
 	pSign        = phaseIndex("Cosign sign")
 	pDeploy      = phaseIndex("Deploy Container Apps")
 )
@@ -123,7 +123,7 @@ func NewMock(c config.Config, st store.Store, version string) *Mock {
 	return &Mock{
 		cfg: cfg{
 			env: c.Environment, repo: c.GitHubRepo, phobosURL: c.PhobosURL,
-			azureURL: c.AzureURL, acr: c.ACRName, caasApp: c.CaaSApp,
+			azureURL: c.AzureURL, image: c.GHCRImage, caasApp: c.CaaSApp,
 		},
 		store:   st,
 		rng:     rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0x5eed)),
@@ -205,7 +205,7 @@ func (m *Mock) Seed(ctx context.Context) error {
 		}
 		if h.target == "azure" && failIdx < 0 {
 			m.prod = model.ProdInfo{Tag: h.tag, Digest: d.Digest, Since: t}
-			m.acr = append([]acrEntry{{tag: h.tag, digest: d.Digest, signed: true}}, m.acr...)
+			m.registry = append([]regEntry{{tag: h.tag, digest: d.Digest, signed: true}}, m.registry...)
 		}
 		lastAt = at
 	}
@@ -250,13 +250,13 @@ func (m *Mock) advance(ctx context.Context) error {
 	s.DurationS = r.durations[r.cur]
 	if r.cur == r.failAt {
 		s.Status = model.StatusFailed
-		s.Log = r.stepLog(r.cur, true)
+		s.Log = r.stepLog(r.cur, true, m.cfg.image)
 		r.finished, r.failed = true, true
 		m.nextRunAt = now.Add(pauseAfterFailure)
 		return m.recordAzure(ctx, r)
 	}
 	s.Status = model.StatusSuccess
-	s.Log = r.stepLog(r.cur, false)
+	s.Log = r.stepLog(r.cur, false, m.cfg.image)
 
 	var err error
 	switch r.cur {
@@ -266,10 +266,10 @@ func (m *Mock) advance(ctx context.Context) error {
 	case pPushTag:
 		m.githubTag = r.tag
 	case pPush:
-		m.acr = append([]acrEntry{{tag: r.tag, digest: r.digest}}, m.acr...)
-		m.acr = m.acr[:min(len(m.acr), 8)]
+		m.registry = append([]regEntry{{tag: r.tag, digest: r.digest}}, m.registry...)
+		m.registry = m.registry[:min(len(m.registry), 8)]
 	case pSign:
-		m.acr[0].signed = true
+		m.registry[0].signed = true
 	case pDeploy:
 		m.prod = model.ProdInfo{Tag: r.tag, Digest: r.digest, Since: now}
 	}
@@ -410,7 +410,7 @@ func (m *Mock) snapshot() model.Snapshot {
 		GeneratedAt: now,
 		Stages: []model.Stage{
 			m.imageStage(now), m.phobosStage(now), m.composeStage(now),
-			m.githubStage(now), m.actionsStage(now), m.acrStage(now), m.caasStage(now),
+			m.githubStage(now), m.actionsStage(now), m.ghcrStage(now), m.caasStage(now),
 		},
 	}
 }
@@ -458,7 +458,13 @@ func (r *mockRun) current() string {
 }
 
 func (m *Mock) imageRef(tag string) string {
-	return fmt.Sprintf("%s.azurecr.io/containermaxxing:%s", m.cfg.acr, tag)
+	return m.cfg.image + ":" + tag
+}
+
+// packageURL pointe vers la page du package GHCR sur GitHub.
+func (m *Mock) packageURL() string {
+	owner, name, _ := strings.Cut(strings.TrimPrefix(m.cfg.image, "ghcr.io/"), "/")
+	return fmt.Sprintf("https://github.com/users/%s/packages/container/package/%s", owner, name)
 }
 
 func (m *Mock) imageStage(now time.Time) model.Stage {
@@ -589,11 +595,11 @@ func (m *Mock) actionsStage(now time.Time) model.Stage {
 	return st
 }
 
-func (m *Mock) acrStage(now time.Time) model.Stage {
+func (m *Mock) ghcrStage(now time.Time) model.Stage {
 	r := m.run
-	steps, status := m.stageSteps(model.StageACR)
-	st := model.Stage{ID: model.StageACR, Label: "ACR", UpdatedAt: now, Status: status, Steps: steps}
-	top := m.acr[0]
+	steps, status := m.stageSteps(model.StageGHCR)
+	st := model.Stage{ID: model.StageGHCR, Label: "GHCR", UpdatedAt: now, Status: status, Steps: steps}
+	top := m.registry[0]
 	switch {
 	case status == model.StatusRunning:
 		st.Summary = r.current() + " · " + r.tag
@@ -609,15 +615,15 @@ func (m *Mock) acrStage(now time.Time) model.Stage {
 		sig = "cosign keyless (Sigstore · Fulcio + Rekor) — vérifiée"
 	}
 	var tags []string
-	for _, e := range m.acr[:min(len(m.acr), 5)] {
+	for _, e := range m.registry[:min(len(m.registry), 5)] {
 		tags = append(tags, e.tag)
 	}
 	st.Fields = []model.Field{
-		{Label: "Registre", Value: m.cfg.acr + ".azurecr.io", Mono: true},
-		{Label: "Dépôt", Value: "containermaxxing", Mono: true},
+		{Label: "Package", Value: m.cfg.image, Mono: true, Link: m.packageURL()},
 		{Label: "Dernier tag", Value: top.tag},
 		{Label: "Digest", Value: top.digest, Mono: true},
 		{Label: "Signature", Value: sig},
+		{Label: "Push", Value: "GITHUB_TOKEN éphémère du run (permissions: packages: write)"},
 		{Label: "Tags récents", Value: strings.Join(tags, " · ")},
 	}
 	return st
@@ -701,7 +707,7 @@ func (m *Mock) dockleScan(r *mockRun, phase int) model.Scan {
 
 // --- utilitaires -------------------------------------------------------------
 
-func (r *mockRun) stepLog(i int, failed bool) string {
+func (r *mockRun) stepLog(i int, failed bool, image string) string {
 	switch phases[i].name {
 	case "Build multi-stage", "Build image":
 		return fmt.Sprintf("[builder] go build -trimpath -ldflags='-s -w' ./cmd/server\n[final] FROM gcr.io/distroless/static:nonroot\nwriting image %s done", r.digest)
@@ -729,10 +735,10 @@ func (r *mockRun) stepLog(i int, failed bool) string {
 		return "* [new tag] " + r.tag + " -> " + r.tag
 	case "Checkout":
 		return "actions/checkout@v4 — " + r.commit[:7]
-	case "Push ACR":
-		return fmt.Sprintf("%s: digest: %s size: 1157", r.tag, r.digest)
+	case "Push GHCR":
+		return fmt.Sprintf("The push refers to repository [%s]\n%s: digest: %s size: 1157", image, r.tag, r.digest)
 	case "Cosign sign":
-		return "Generating ephemeral keys...\nRetrieving signed certificate...\ntlog entry created\nPushing signature to: containermaxxing"
+		return "Generating ephemeral keys...\nRetrieving signed certificate...\ntlog entry created\nPushing signature to: " + image
 	case "Deploy Container Apps":
 		return "Revision provisioned and active, traffic 100%"
 	case "Record deployment":

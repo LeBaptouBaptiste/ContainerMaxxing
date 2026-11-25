@@ -24,7 +24,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	hub := live.NewHub(log, 2)
 	st := store.WithHook(store.NewMemory(), hub.PublishDeployment)
-	cfg := config.Config{Environment: "local", GitHubRepo: "o/r", ACRName: "acr", CaaSApp: "app"}
+	cfg := config.Config{Environment: "local", GitHubRepo: "o/r", GHCRImage: "ghcr.io/o/r", CaaSApp: "app"}
 	mock := source.NewMock(cfg, st, "test")
 	if err := mock.Seed(context.Background()); err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestSecurityHeadersAndStatus(t *testing.T) {
 		t.Fatalf("CSP manquante: %q", csp)
 	}
 	b, _ := io.ReadAll(resp.Body)
-	for _, id := range []string{"image", "phobos", "compose", "github", "actions", "acr", "caas"} {
+	for _, id := range []string{"image", "phobos", "compose", "github", "actions", "ghcr", "caas"} {
 		if !strings.Contains(string(b), `"id":"`+id+`"`) {
 			t.Errorf("étape %s absente", id)
 		}

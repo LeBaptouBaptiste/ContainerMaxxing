@@ -4,7 +4,7 @@ Projet DevSecOps (Sup de Vinci) : une webapp qui **visualise en direct sa propre
 de l'image locale jusqu'à Azure Container Apps, pour la démo étape par étape en soutenance.
 
 ```
-Image → phobos → Podman compose → GitHub → GitHub Actions → ACR → Container Apps
+Image → phobos → Podman compose → GitHub → GitHub Actions → GHCR → Container Apps
 └──── déploiement statique (phobos) ────┘ └────────── déploiement continu (Azure) ──────────┘
 ```
 
@@ -17,8 +17,8 @@ Image → phobos → Podman compose → GitHub → GitHub Actions → ACR → Co
 | 3 | compose : Postgres, Redis, Caddy, durcissement | ⏳ |
 | 4 | Déploiement statique sur phobos (podman-compose + Nginx Proxy Manager) | ⏳ |
 | 5 | Branchement GitHub API | ⏳ |
-| 6 | Workflow CI (build → Trivy → Dockle → ACR → cosign → CaaS) | ⏳ |
-| 7 | Déploiement Azure + branchement ACR / Container Apps | ⏳ |
+| 6 | Workflow CI (build → Trivy → Dockle → GHCR (ghcr.io) → cosign → CaaS) | ⏳ |
+| 7 | Déploiement Azure + branchement GHCR / Container Apps | ⏳ |
 | 8 | Finitions et mode démo | ⏳ |
 
 ## Architecture
@@ -27,7 +27,7 @@ Image → phobos → Podman compose → GitHub → GitHub Actions → ACR → Co
 cmd/server/          point d'entrée (serveur + sous-commande `healthcheck`)
 internal/config/     configuration 100 % variables d'environnement
 internal/model/      types partagés + validation des entrées
-internal/source/     collecte de l'état (Mock aujourd'hui ; GitHub/ACR/CaaS ensuite)
+internal/source/     collecte de l'état (Mock aujourd'hui ; GitHub/GHCR/CaaS ensuite)
 internal/live/       polling périodique + diffusion SSE (hub)
 internal/store/      historique des déploiements (mémoire aujourd'hui ; PostgreSQL à l'étape 3)
 internal/api/        routes HTTP, middlewares de sécurité
@@ -78,7 +78,7 @@ défaut en mock, soit ~45 s par release, suivies de 30 s de pause). Chaque relea
 `phobos` (après les healthchecks) et un déploiement `azure` (fin de CI).
 
 **Une release sur quatre échoue au scan Trivy de la CI** (vulnérabilité fictive `MOCK-CVE-0001`, absente au scan
-local) : le focus reste 20 s sur l'échec, et l'ACR et Container Apps restent sur la version précédente, ce qui
+local) : le focus reste 20 s sur l'échec, et GHCR et Container Apps restent sur la version précédente, ce qui
 illustre la *quality gate*.
 
 ## Lancer en local
