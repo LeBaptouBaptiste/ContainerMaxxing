@@ -30,9 +30,17 @@ type Server struct {
 	static      fs.FS
 	done        <-chan struct{} // fermé à l'arrêt : termine les flux SSE
 	devBootID   string          // non vide en mode dev uniquement
+	demo        DemoController  // nil : contrôles de démo désactivés
+	demoToken   [32]byte
+	demoAuth    bool // un jeton est exigé pour les contrôles de démo
 }
 
 type Options struct {
+	// Demo (optionnel) : contrôles du mode présentateur. DemoToken vide =
+	// pas de jeton exigé (réservé à APP_ENV=local, décidé par main).
+	Demo      DemoController
+	DemoToken string
+
 	Log         *slog.Logger
 	Hub         *live.Hub
 	Store       store.Store
@@ -50,6 +58,7 @@ func New(o Options) *Server {
 		log: o.Log, hub: o.Hub, store: o.Store, static: o.Static, done: o.Done,
 		ingestToken: sha256.Sum256([]byte(o.IngestToken)), ingestOn: o.IngestToken != "",
 		devBootID: o.DevBootID,
+		demo:      o.Demo, demoToken: sha256.Sum256([]byte(o.DemoToken)), demoAuth: o.DemoToken != "",
 	}
 }
 
@@ -62,6 +71,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/deployments/{id}", s.getDeployment)
 	mux.HandleFunc("POST /api/deployments", s.createDeployment)
 	mux.HandleFunc("GET /api/stats", s.stats)
+	if s.demo != nil {
+		s.demoRoutes(mux)
+	}
 	mux.Handle("GET /", staticHandler(s.static, s.devBootID != ""))
 	return s.recoverer(s.logRequests(securityHeaders(mux)))
 }
@@ -170,12 +182,17 @@ func (s *Server) createDeployment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorized(r *http.Request) bool {
+	return bearerMatches(r, s.ingestToken)
+}
+
+// bearerMatches compare le jeton Bearer à l'empreinte attendue, à temps constant.
+func bearerMatches(r *http.Request, want [32]byte) bool {
 	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || tok == "" {
 		return false
 	}
 	got := sha256.Sum256([]byte(tok))
-	return subtle.ConstantTimeCompare(got[:], s.ingestToken[:]) == 1
+	return subtle.ConstantTimeCompare(got[:], want[:]) == 1
 }
 
 // stream diffuse les snapshots en Server-Sent Events.

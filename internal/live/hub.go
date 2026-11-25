@@ -62,6 +62,12 @@ func (h *Hub) poll(ctx context.Context, src source.Source, timeout time.Duration
 	if len(snap.Stages) == 0 {
 		return
 	}
+	h.Publish(snap)
+}
+
+// Publish enregistre et diffuse immédiatement un snapshot (utilisé après une
+// commande du mode démo, pour ne pas attendre le prochain poll).
+func (h *Hub) Publish(snap model.Snapshot) {
 	b, err := json.Marshal(snap)
 	if err != nil {
 		h.log.Error("marshal snapshot", "err", err)

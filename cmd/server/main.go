@@ -62,6 +62,12 @@ func run() error {
 	if err := mock.Seed(ctx); err != nil {
 		return fmt.Errorf("seed: %w", err)
 	}
+	var demo api.DemoController
+	if cfg.DemoEnabled() {
+		mock.EnableDemo(cfg.DemoToken != "")
+		demo = mock
+		log.Info("demo controls enabled", "token_required", cfg.DemoToken != "")
+	}
 	go hub.Run(ctx, mock, cfg.PollInterval)
 
 	// En prod, le frontend est embarqué dans le binaire. En mode dev, il est lu
@@ -79,6 +85,7 @@ func run() error {
 		Handler: api.New(api.Options{
 			Log: log, Hub: hub, Store: st, IngestToken: cfg.IngestToken,
 			Static: static, Done: ctx.Done(), DevBootID: bootID,
+			Demo: demo, DemoToken: cfg.DemoToken,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second, // anti-slowloris
 		ReadTimeout:       10 * time.Second,

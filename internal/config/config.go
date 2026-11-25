@@ -22,6 +22,10 @@ type Config struct {
 	DevMode   bool   // DEV_MODE=1
 	StaticDir string // STATIC_DIR (requis en mode dev), ex. web/static
 
+	// Contrôles de démo (scénarios, pause, pas à pas), disponibles uniquement
+	// avec la source mock : sans jeton en local, avec DEMO_TOKEN ailleurs.
+	DemoToken string // DEMO_TOKEN ou DEMO_TOKEN_FILE
+
 	// Informations publiques affichées dans les panneaux (pas des secrets).
 	GitHubRepo string // GITHUB_REPOSITORY (owner/repo)
 	PhobosURL  string // PHOBOS_URL
@@ -50,6 +54,12 @@ func Load() (Config, error) {
 	}
 	if c.IngestToken != "" && len(c.IngestToken) < 32 {
 		return c, fmt.Errorf("INGEST_TOKEN trop court (32 caractères minimum)")
+	}
+	if c.DemoToken, err = secret("DEMO_TOKEN"); err != nil {
+		return c, err
+	}
+	if c.DemoToken != "" && len(c.DemoToken) < 32 {
+		return c, fmt.Errorf("DEMO_TOKEN trop court (32 caractères minimum)")
 	}
 
 	// En mock, un poll = un step : 2 s donne une animation fluide pour la démo.
@@ -85,6 +95,12 @@ func Load() (Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// DemoEnabled : les contrôles de démo n'existent qu'avec la source mock, et
+// hors poste local seulement si un jeton les protège.
+func (c Config) DemoEnabled() bool {
+	return c.DataSource == "mock" && (c.Environment == "local" || c.DemoToken != "")
 }
 
 func env(key, def string) string {
