@@ -1,0 +1,13 @@
+{
+  "name": "containermaxxing-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch --preserveWatchOutput",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

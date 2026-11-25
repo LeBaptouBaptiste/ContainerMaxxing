@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "rootDir": "web/src",
+    "outDir": "web/static/js",
+
+    "strict": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+
+    "noEmitOnError": true,
+    "removeComments": true,
+    "newLine": "lf"
+  },
+  "include": ["web/src/**/*.ts"],
+  "watchOptions": {
+    "watchFile": "dynamicPriorityPolling",
+    "watchDirectory": "dynamicPriorityPolling",
+    "fallbackPolling": "dynamicPriorityPolling"
+  }
+}

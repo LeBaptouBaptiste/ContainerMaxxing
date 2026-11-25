@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ContainerMaxxing — chaîne de déploiement</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/js/app.js"></script>
+</head>
+<body>
+  <header class="banner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>ContainerMaxxing</span>
+    </div>
+    <div class="banner-prod">
+      <span class="eyebrow">En production</span>
+      <span class="prod-tag" id="prod-tag">—</span>
+      <code class="prod-digest" id="prod-digest"></code>
+    </div>
+    <div class="banner-meta">
+      <span class="eyebrow">Page servie par</span>
+      <span class="env-badge" id="env-badge" data-env="">—</span>
+      <span class="source-badge" id="source-badge" hidden>données mock</span>
+    </div>
+    <div class="live" id="live" data-state="connecting" role="status" aria-live="polite">
+      <span class="live-dot" aria-hidden="true"></span><span id="live-text">connexion…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="chain" aria-labelledby="chain-title">
+      <h2 id="chain-title" class="sr-only">Chaîne de déploiement</h2>
+
+      <div class="run-head">
+        <div class="run-id">
+          <span class="eyebrow">Release</span>
+          <span class="run-tag" id="run-tag">—</span>
+          <span class="run-number" id="run-number"></span>
+          <span id="run-status"></span>
+          <span class="run-step" id="run-step"></span>
+        </div>
+        <div class="chain-controls">
+          <span class="chain-mode" id="chain-mode"></span>
+          <button type="button" class="icon-btn" id="chain-prev" aria-label="Étape précédente">◀</button>
+          <button type="button" class="btn" id="chain-auto" aria-pressed="true">❚❚ Suivi auto</button>
+          <button type="button" class="btn" id="chain-overview" aria-pressed="false">Vue d'ensemble</button>
+          <button type="button" class="btn" id="chain-fullscreen" aria-pressed="false" title="Plein écran du navigateur (F)">Plein écran</button>
+          <button type="button" class="icon-btn" id="chain-next" aria-label="Étape suivante">▶</button>
+        </div>
+      </div>
+      <div class="run-progress" aria-hidden="true">
+        <div class="run-progress-bar" id="run-progress"></div>
+        <span class="run-count" id="run-count"></span>
+      </div>
+
+      <div class="demo-bar" id="demo-bar" hidden>
+        <div class="demo-row">
+          <div class="demo-scenarios" id="demo-scenarios" role="group" aria-label="Lancer une release"></div>
+          <div class="demo-controls">
+            <button type="button" class="icon-btn" id="demo-back" aria-label="Reculer d'un step (Maj+Espace)" title="Reculer d'un step (Maj+Espace)">⏮</button>
+            <button type="button" class="btn" id="demo-play" title="Pause / lecture (P)">❚❚ Pause</button>
+            <button type="button" class="icon-btn" id="demo-fwd" aria-label="Avancer d'un step (Espace)" title="Avancer d'un step (Espace)">⏭</button>          </div>
+        </div>
+        <form class="demo-auth" id="demo-auth" hidden>
+          <label for="demo-token">Jeton de démo</label>
+          <input type="password" id="demo-token" autocomplete="off" spellcheck="false">
+          <button type="submit" class="btn">OK</button>
+        </form>
+        <p class="demo-msg" id="demo-msg" role="status"></p>
+        <p class="demo-keys" aria-hidden="true">
+          <kbd>Espace</kbd> avancer · <kbd>Maj</kbd>+<kbd>Espace</kbd> reculer · <kbd>P</kbd> pause · <kbd>1</kbd>–<kbd>4</kbd> scénarios · <kbd>F</kbd> plein écran · <kbd>O</kbd> vue d'ensemble · <kbd>←</kbd><kbd>→</kbd> étapes
+        </p>
+      </div>
+      <p class="replay-banner" id="replay-banner" hidden>
+        Rejeu · <span id="replay-pos"></span>
+        <button type="button" class="btn" id="replay-live">Revenir au direct</button>
+      </p>
+
+      <!-- Caméra : la « scène » (piste + nœuds) est zoomée sur l'étape en cours,
+           le panneau de détails glisse à droite ; entre deux étapes on dézoome. -->
+      <div class="viewport" id="viewport" data-zoom="out">
+        <div class="world" id="world">
+          <div class="groups" aria-hidden="true">
+            <span class="group group-local">Déploiement statique · phobos</span>
+            <span class="group group-ci">Déploiement continu · Azure</span>
+          </div>
+          <div class="track" id="track">
+            <div class="track-line" aria-hidden="true"><div class="track-fill" id="track-fill"></div></div>
+            <div class="packet" id="packet" aria-hidden="true">
+              <span class="packet-box"></span>
+              <span class="packet-tag" id="packet-tag"></span>
+              <span class="packet-note" id="packet-note"></span>
+            </div>
+            <ol class="nodes" id="nodes"></ol>
+          </div>
+        </div>
+        <article class="zoom-panel" id="spotlight"></article>
+        <div class="tour-bar" id="tour-bar" hidden></div>
+      </div>
+      <p class="sr-only" id="chain-announce" aria-live="polite"></p>
+    </section>
+
+    <section class="history-section" aria-labelledby="history-title">
+      <div class="section-head">
+        <h2 id="history-title">Historique des déploiements</h2>
+        <p class="hint">Cochez deux versions pour les comparer.</p>
+      </div>
+      <div class="stats" id="stats"></div>
+
+      <figure class="chart-card">
+        <figcaption>
+          <span class="chart-title">Vulnérabilités par déploiement</span>
+          <span class="legend" id="cve-legend"></span>
+        </figcaption>
+        <div class="chart" id="cve-chart"></div>
+      </figure>
+
+      <div class="compare" id="compare" hidden></div>
+
+      <div class="table-wrap">
+        <table class="timeline" id="timeline">
+          <thead>
+            <tr>
+              <th scope="col"><span class="sr-only">Comparer</span></th>
+              <th scope="col">Version</th>
+              <th scope="col">Cible</th>
+              <th scope="col">Statut</th>
+              <th scope="col" class="num">Crit.</th>
+              <th scope="col" class="num">High</th>
+              <th scope="col" class="num">Med.</th>
+              <th scope="col">Dockle</th>
+              <th scope="col">Signée</th>
+              <th scope="col" class="num">Durée</th>
+              <th scope="col">Date</th>
+              <th scope="col">Run</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" aria-labelledby="drawer-title" hidden>
+    <header class="drawer-head">
+      <div>
+        <p class="eyebrow" id="drawer-eyebrow"></p>
+        <h2 id="drawer-title"></h2>
+      </div>
+      <button type="button" class="icon-btn" id="drawer-close" aria-label="Fermer le panneau">✕</button>
+    </header>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# Secrets : jamais commités
+.env
+.env.*
+!.env.example
+secrets/
+
+# Build
+/bin/
+/dist/
+*.exe
+
+# Rapports de scan générés localement
+*.sarif
+reports/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Frontend : dépendances et JS compilé depuis web/src (npm run build)
+node_modules/
+web/static/js/
