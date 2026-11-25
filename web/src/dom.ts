@@ -5,9 +5,9 @@
 import type { Level, StageID, Status } from "./types.js";
 
 export const STATUS_LABEL: Record<Status, string> = {
-  success: "OK", running: "en cours", failed: "échec", pending: "en attente", unknown: "inconnu",
+  success: "OK", running: "en cours", failed: "échec", pending: "en attente", unknown: "inconnu", skipped: "ignoré",
 };
-const STATUS_ICON: Record<Status, string> = { success: "✓", failed: "✕", running: "", pending: "", unknown: "?" };
+const STATUS_ICON: Record<Status, string> = { success: "✓", failed: "✕", running: "", pending: "", unknown: "?", skipped: "–" };
 
 export const LEVEL_COLOR: Record<Level, string> = {
   critical: "var(--critical)", high: "var(--serious)", medium: "var(--warning)", low: "var(--low)", info: "var(--accent)",

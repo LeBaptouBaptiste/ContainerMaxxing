@@ -6,6 +6,7 @@ import {
   $, el, svg, safeLink, statusBadge, fmtDur, fmtDate, shortDigest, pct, getJSON, STATUS_LABEL, LEVEL_COLOR,
 } from "./dom.js";
 import { createChain } from "./chain.js";
+import { createDemo } from "./demo.js";
 import type { Deployment, DeploymentStep, Field, Scan, Snapshot, Stage, StageID, Stats, Step } from "./types.js";
 
 type SeverityKey = "cve_critical" | "cve_high" | "cve_medium";
@@ -26,6 +27,8 @@ const state = {
 };
 
 const chain = createChain({ onOpenDetails: (id) => openDrawer({ kind: "stage", id }) });
+// Le module démo décide quoi montrer sur la chaîne : le direct, ou un état rejoué.
+const demo = createDemo({ display: (snap, frozen) => chain.update(snap, frozen) });
 
 // ---------- bandeau -------------------------------------------------------------
 
@@ -363,7 +366,7 @@ async function refreshHistory(): Promise<void> {
 function onSnapshot(s: Snapshot): void {
   state.snapshot = s;
   renderBanner(s);
-  chain.update(s);
+  demo.ingest(s);
   if (state.drawer?.kind === "stage") renderDrawer();
 }
 

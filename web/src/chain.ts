@@ -16,7 +16,8 @@ const MAX_FIELDS = 5;
 type Mode = "live" | "tour" | "manual" | null;
 
 export interface Chain {
-  update(snap: Snapshot): void;
+  /** frozen : release en pause ou rejouée, les chronomètres ne tournent plus. */
+  update(snap: Snapshot, frozen?: boolean): void;
   focusStage(id: StageID): void;
 }
 
@@ -30,6 +31,7 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
     resumeTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     resumeAt: 0,
     rendered: "",                  // clé du dernier rendu du spotlight (évite de reconstruire pour rien)
+    frozen: false,                 // pause présentateur ou rejeu
   };
 
   const nodes = $<HTMLOListElement>("#nodes");
@@ -133,12 +135,6 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
 
   // --- rendu -------------------------------------------------------------------
 
-  function update(snap: Snapshot): void {
-    s.snap = snap;
-    decide();
-    render();
-  }
-
   function render(): void {
     if (!s.snap) return;
     const { stages, run } = s.snap;
@@ -228,9 +224,16 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
     else label.textContent = "suivi auto en pause";
   }
 
+  function update(snap: Snapshot, frozen = false): void {
+    s.snap = snap;
+    s.frozen = frozen;
+    decide();
+    render();
+  }
+
   function renderSpotlight(st: Stage, stages: Stage[]): void {
     // Reconstruit seulement si l'étape affichée a changé de contenu.
-    const key = JSON.stringify([st.id, st.status, st.summary, st.steps, st.scans, st.fields]);
+    const key = JSON.stringify([st.id, st.status, st.summary, st.steps, st.scans, st.fields, s.frozen]);
     if (key === s.rendered) return;
     s.rendered = key;
     const i = stages.indexOf(st);
@@ -257,9 +260,15 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
     if (!steps.length) return el("p", { class: "hint", text: "Aucun step." });
     return el("ol", { class: "spot-steps" }, steps.map((x) => el("li", { dataset: { status: x.status } },
       statusBadge(x.status, x.name),
-      x.status === "running" && x.started_at
+      x.status === "running" && x.started_at && !s.frozen
         ? el("span", { class: "step-dur live", dataset: { started: x.started_at }, text: "0s" })
-        : el("span", { class: "step-dur", text: x.status === "pending" ? "—" : fmtDur(x.duration_s) }))));
+        : el("span", { class: "step-dur", text: stepDuration(x) }))));
+  }
+
+  function stepDuration(x: Step): string {
+    if (x.status === "running") return "en pause"; // chronomètre figé (pause ou rejeu)
+    if (x.status === "pending" || x.status === "skipped") return "—";
+    return fmtDur(x.duration_s);
   }
 
   function terminal(steps: Step[]): HTMLElement {

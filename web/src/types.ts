@@ -1,7 +1,7 @@
 // Types des réponses de l'API, alignés sur internal/model/model.go.
 // Les slices Go sans `omitempty` peuvent arriver à `null` : on le reflète ici.
 
-export type Status = "success" | "running" | "failed" | "pending" | "unknown";
+export type Status = "success" | "running" | "failed" | "pending" | "unknown" | "skipped";
 export type StageID = "image" | "phobos" | "compose" | "github" | "actions" | "ghcr" | "caas";
 export type Level = "critical" | "high" | "medium" | "low" | "info";
 export type Target = "phobos" | "azure";
@@ -70,12 +70,27 @@ export interface RunInfo {
   started_at: string;
 }
 
+export interface ScenarioInfo {
+  id: string;
+  label: string;
+  description: string;
+}
+
+/** Présent uniquement quand les contrôles de démo sont activés côté serveur. */
+export interface DemoInfo {
+  auth_required: boolean;
+  paused: boolean;
+  scenario: string;
+  scenarios: ScenarioInfo[];
+}
+
 export interface Snapshot {
   environment: "local" | "phobos" | "azure";
   source: "mock" | "live";
   app_version: string;
   prod: ProdInfo;
   run?: RunInfo;
+  demo?: DemoInfo;
   stages: Stage[];
   generated_at: string;
 }

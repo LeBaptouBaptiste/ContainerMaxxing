@@ -23,6 +23,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* l'attribut hidden l'emporte toujours sur display */
 html, body { margin: 0; }
 body {
   background: var(--bg);
@@ -337,6 +338,45 @@ main { max-width: 1440px; margin: 0 auto; padding: 28px; display: grid; gap: 40p
   margin: 0; padding: 10px 12px; background: var(--bg); color: var(--text-2);
   font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
 }
+
+/* ---------- statut « ignoré » ---------- */
+.status[data-status="skipped"] .status-icon { background: transparent; border: 1.5px dashed var(--text-3); color: var(--text-3); }
+.spot-steps li[data-status="skipped"] .status { color: var(--text-3); text-decoration: line-through; }
+
+/* ---------- mode démo ---------- */
+.demo-bar { margin: -12px 0 22px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); display: grid; gap: 8px; }
+.demo-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.demo-scenarios, .demo-controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.scenario { display: inline-flex; align-items: center; gap: 7px; }
+.scenario[aria-pressed="true"] { color: var(--text); border-color: var(--text-3); }
+kbd {
+  font: 10.5px var(--mono); color: var(--text-3); padding: 0 4px; border-radius: 3px;
+  border: 1px solid var(--border); background: var(--surface);
+}
+.demo-msg { margin: 0; font-size: 12.5px; color: var(--text-2); min-height: 1em; }
+.demo-keys { margin: 0; font-size: 11.5px; color: var(--text-3); }
+.demo-auth { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--text-2); }
+.demo-auth input {
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 8px; font: 12.5px var(--mono); width: 280px;
+}
+.replay-banner {
+  display: flex; align-items: center; gap: 12px; margin: -12px 0 18px; padding: 6px 12px;
+  border-left: 2px solid var(--warning); background: var(--surface-2); font-size: 13px; color: var(--text-2);
+}
+
+/* ---------- mode présentation (projecteur) ---------- */
+body.presenter .history-section, body.presenter .banner-meta .source-badge { display: none; }
+body.presenter main { max-width: none; padding: 20px 32px; }
+body.presenter .demo-keys { display: none; }
+body.presenter .run-tag { font-size: 28px; }
+body.presenter .node-label { font-size: 15px; }
+body.presenter .spotlight { min-height: 380px; }
+body.presenter .spot-title h3 { font-size: 26px; }
+body.presenter .spot-sub { font-size: 15px; }
+body.presenter .spot-steps li .status { font-size: 15px; }
+body.presenter .spot-col .fields { font-size: 14.5px; }
+body.presenter .terminal { height: 300px; font-size: 13.5px; }
 
 @media (max-width: 1100px) {
   .banner { grid-template-columns: 1fr auto; gap: 10px 20px; }
