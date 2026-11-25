@@ -14,8 +14,8 @@ Image → phobos → Podman compose → GitHub → GitHub Actions → GHCR → C
 |---|-------|------|
 | 1 | App Go + frontend avec données mockées | ✅ |
 | 2 | Dockerfile distroless + scans locaux (Trivy, Dockle) | ✅ 0 vulnérabilité, Dockle PASS |
-| 3 | compose : app, Postgres, Redis, durcissement (reverse proxy : NPM existant sur beacon) | 🟡 PostgreSQL et cache Redis côté app faits ; compose de prod à faire |
-| 4 | Déploiement statique sur phobos (podman-compose, exposé par NPM sur beacon) | ⏳ |
+| 3 | compose : app, Postgres, Redis, durcissement (reverse proxy : NPM existant sur beacon) | ✅ |
+| 4 | Déploiement statique sur phobos (podman-compose, exposé par NPM sur beacon) | 🟡 configuration prête (`deploy/phobos.env`), déploiement à faire |
 | 5 | Branchement GitHub API | ⏳ |
 | 6 | Workflow CI (build → Trivy → Dockle → GHCR (ghcr.io) → cosign → CaaS) | ⏳ |
 | 7 | Déploiement Azure + branchement GHCR / Container Apps | ⏳ |
@@ -303,12 +303,12 @@ podman-compose --env-file deploy/phobos.env up -d --build  # construit l'image e
 podman-compose --env-file deploy/phobos.env ps
 ```
 
-Sans `--env-file`, le compose garde des valeurs sûres (`127.0.0.1:8080`) : pratique pour le tester sur un poste.
+Sans `--env-file`, le compose publie l'app sur `127.0.0.1:11262` (boucle locale) : pratique pour le tester sur un poste.
 
 | Variable | Défaut du compose | phobos (`deploy/phobos.env`) | Rôle |
 |----------|-------------------|------------------------------|------|
 | `APP_BIND` | `127.0.0.1` | `172.22.0.1` | interface privée où l'app publie son port, joignable par le NPM de beacon (jamais `0.0.0.0`) |
-| `APP_PORT` | `8080` | `11262` | port publié, cible du proxy host NPM |
+| `APP_PORT` | `11262` | `11262` | port publié, cible du proxy host NPM |
 | `APP_ENV` | `phobos` | `phobos` | environnement affiché dans le bandeau |
 | `CAAS_APP` | `containers2v` | `containers2v` | nom de la Container App affiché dans l'étape « Container Apps » |
 | `DATA_SOURCE` | `mock` | — | source des données |
