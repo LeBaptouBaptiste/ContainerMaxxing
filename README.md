@@ -205,6 +205,32 @@ défaut en mock, soit ~45 s par release, suivies de 30 s de pause). Chaque relea
 local) : le focus reste 20 s sur l'échec, et GHCR et Container Apps restent sur la version précédente, ce qui
 illustre la *quality gate*.
 
+### Données réelles : API GitHub (`DATA_SOURCE=live`)
+
+Avec `DATA_SOURCE=live`, la chaîne affiche les vraies données du dépôt, interrogées **par le serveur** (le navigateur
+ne contacte jamais GitHub et ne voit jamais le jeton) :
+
+| Étape | Données |
+|-------|---------|
+| GitHub | dernier commit de `GITHUB_BRANCH` (sha, message, auteur, date), dernier tag semver |
+| GitHub Actions | dernier run de `GITHUB_WORKFLOW` (défaut `ci.yml`), ses steps et leurs durées |
+| GHCR / Container Apps | steps des jobs `publish` / `deploy` du même workflow (Dev 6/7) |
+| Release suivie | le dernier run de la CI : la caméra se place sur l'étape du job en cours ou en échec |
+| Version en prod | tag du dernier run réussi déclenché par un tag |
+
+Les étapes qui ne sont pas encore reliées à des données réelles (image, compose…) sont marquées « non branché »
+plutôt que d'afficher des valeurs simulées. Tant que `ci.yml` n'existe pas, l'étape Actions l'indique et liste les
+derniers runs du dépôt.
+
+**Quota d'API** : 5 000 requêtes/h avec un jeton, 60/h sans. Le client (`internal/github`) cumule un cache partagé
+(Redis) avec une durée de vie par ressource, des requêtes conditionnelles (`If-None-Match` : une réponse 304
+réutilise le corps déjà reçu), la mémorisation des 404 pendant 5 min, et suspend toute requête jusqu'à la
+réinitialisation annoncée par GitHub si le quota est atteint. Le jeton est donc **obligatoire en live hors poste
+local** (`APP_ENV=local`).
+
+Jeton recommandé : *fine-grained personal access token* limité à ce dépôt, en **lecture seule** (Actions: Read,
+Contents: Read, Metadata: Read), fourni via `GITHUB_TOKEN_FILE`.
+
 ## Image de conteneur
 
 Le `Dockerfile` construit l'image en trois étapes : TypeScript → JavaScript (`node`), binaire Go statique (`golang`),
@@ -427,3 +453,15 @@ curl -X POST http://localhost:8080/api/deployments \
 | **Port publié sur l'IP privée** | `APP_BIND` vaut `127.0.0.1` par défaut et doit être réglé sur l'IP privée de phobos : jamais `0.0.0.0`. |
 | **Réseaux séparés** | `backend` est `internal: true` : PostgreSQL et Redis n'ont aucun accès à Internet (impossible d'exfiltrer des données ou de télécharger un outil) et ne peuvent pas publier de port. Seule l'app est aussi sur `edge`, le réseau qui porte son port publié (et, plus tard, ses appels à GitHub/Azure). |
 | **Sondes de santé et démarrage ordonné** | Chaque service a une sonde (`/server healthcheck` pour l'app distroless, `pg_isready`, `PING` Redis via un utilisateur ACL limité à cette commande) ; l'app ne démarre qu'une fois PostgreSQL et Redis `healthy` (`depends_on: condition: service_healthy`). Une sonde qui échoue rend la panne visible au lieu de laisser un service à moitié démarré. |
+
+### Étape 5 — branchement de l'API GitHub
+
+| Choix | Pourquoi |
+|-------|----------|
+| **Appels côté serveur uniquement** | Le navigateur ne parle qu'à l'app : le jeton GitHub ne quitte jamais le serveur et le quota n'est pas consommé par chaque visiteur. |
+| **Jeton en lecture seule, limité au dépôt** | *Fine-grained token* (Actions, Contents, Metadata en lecture) : même volé, il ne permet ni d'écrire dans le dépôt ni de lancer un workflow. Lu depuis un fichier (`GITHUB_TOKEN_FILE`), jamais journalisé. |
+| **HTTPS obligatoire vers l'API** | Le client refuse une URL d'API en HTTP clair (sauf `127.0.0.1` pour les tests) : le jeton ne circule jamais en clair. |
+| **Entrées validées avant de construire l'URL** | Dépôt, fichier de workflow et branche passent par une liste blanche : impossible d'injecter un chemin ou un paramètre dans la requête. |
+| **Réponses bornées** | 2 Mio maximum par réponse, 10 s maximum par requête, textes venant de l'API tronqués et affichés en texte (jamais en HTML). |
+| **Respect du quota** | Cache partagé, requêtes conditionnelles (304), 404 mémorisés, arrêt complet jusqu'à la réinitialisation en cas de quota épuisé : l'app ne martèle jamais l'API. |
+| **Pas de fausses données en live** | Une étape non reliée à une source réelle est affichée « non branché » au lieu de valeurs simulées : ce qui est à l'écran est vérifiable. |
