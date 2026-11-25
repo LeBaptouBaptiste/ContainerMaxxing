@@ -1,0 +1,29 @@
+name: Azure OIDC login test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: [.github/workflows/azure-login-test.yml]
+
+permissions:
+  id-token: write   # requis pour obtenir le token OIDC GitHub
+  contents: read
+
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    environment: prod   # subject OIDC = repo:LeBaptouBaptiste/ContainerMaxxing:environment:prod
+    steps:
+      - name: Azure login (OIDC, sans secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Vérifier l'accès au resource group
+        run: |
+          az account show --query "{subscription:name,user:user.name}" -o table
+          az group show -n rg-caas --query "{name:name,location:location}" -o table
