@@ -1,0 +1,80 @@
+# ContainerMaxxing — déploiement statique sur phobos (podman-compose ou docker compose).
+#
+#   sh scripts/init-secrets.sh       # une seule fois : génère secrets/ (non commité)
+#   podman-compose up -d --build     # construit l'image et démarre la pile
+#   podman-compose ps
+#
+# Configuration non secrète : variables ci-dessous, surchargeables dans un fichier
+# .env (non commité) à côté de ce fichier. Secrets : fichiers dans secrets/,
+# montés en lecture seule dans /run/secrets (jamais en variables d'environnement,
+# donc invisibles dans `podman inspect`).
+name: containermaxxing
+
+services:
+  app:
+    build: .
+    image: ${APP_IMAGE:-localhost/containermaxxing:latest}
+    environment:
+      APP_ENV: ${APP_ENV:-phobos}
+      DATA_SOURCE: ${DATA_SOURCE:-mock}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-LeBaptouBaptiste/ContainerMaxxing}
+      PHOBOS_URL: ${PHOBOS_URL:-https://containers2v-statique.voyager3.fr}
+      AZURE_URL: ${AZURE_URL:-https://containers2v.voyager3.fr}
+      GHCR_IMAGE: ${GHCR_IMAGE:-ghcr.io/lebaptoubaptiste/containermaxxing}
+      DATABASE_URL_FILE: /run/secrets/database_url
+      REDIS_URL_FILE: /run/secrets/redis_url
+      INGEST_TOKEN_FILE: /run/secrets/ingest_token
+    secrets: [database_url, redis_url, ingest_token]
+    ports:
+      # Interface privée de phobos uniquement (jamais 0.0.0.0), pour le NPM de beacon.
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8080"
+    depends_on: [postgres, redis]
+    restart: unless-stopped
+
+  postgres:
+    image: docker.io/library/postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d
+    environment:
+      POSTGRES_DB: containermaxxing
+      POSTGRES_USER: containermaxxing
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: "--auth-local=scram-sha-256 --auth-host=scram-sha-256"
+    secrets: [postgres_password]
+    volumes:
+      # Volume nommé : survit à `podman-compose down` (mais pas à `down -v`).
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: docker.io/library/redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    # Pur cache : pas de persistance, mémoire bornée, éviction LRU.
+    # Accès par liste de contrôle (ACL) : mot de passe obligatoire, commandes dangereuses interdites.
+    command:
+      - redis-server
+      - --aclfile
+      - /run/secrets/redis_acl
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - allkeys-lru
+    secrets: [redis_acl]
+    restart: unless-stopped
+
+volumes:
+  pgdata: {}
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  database_url:
+    file: ./secrets/database_url
+  redis_acl:
+    file: ./secrets/redis_acl
+  redis_url:
+    file: ./secrets/redis_url
+  ingest_token:
+    file: ./secrets/ingest_token
