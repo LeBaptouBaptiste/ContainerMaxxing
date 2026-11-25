@@ -1,17 +1,29 @@
-// Chaîne de déploiement animée.
+// Chaîne de déploiement animée, avec une « caméra ».
 //
 // Le focus passe automatiquement d'une étape à l'autre :
 //  - « direct »  : une release est en cours → on suit l'étape active (ou celle en échec) ;
-//  - « visite »  : rien ne tourne → on fait défiler les étapes toutes les TOUR_MS ;
+//  - « visite »  : rien ne tourne → vue d'ensemble, puis chaque étape tour à tour ;
 //  - « manuel »  : l'utilisateur a choisi une étape → on reprend l'auto après RESUME_MS
 //                  (sauf si le suivi auto est désactivé).
+//
+// La caméra cadre l'étape en focus : la scène (piste + nœuds) est agrandie et
+// décalée pour placer le nœud dans la moitié gauche, et le panneau de détails
+// glisse à droite. Quand le focus change, on dézoome sur la vue d'ensemble,
+// on laisse le paquet avancer, puis on zoome sur la nouvelle étape.
 
 import { $, el, statusBadge, fmtDur, LEVEL_COLOR, STATUS_LABEL, stageIcon, reducedMotion } from "./dom.js";
 import type { RunInfo, Snapshot, Stage, StageID, Step, Status } from "./types.js";
 
-const TOUR_MS = 5000;
+const TOUR_MS = 7000;   // durée de chaque plan pendant la visite automatique
 const RESUME_MS = 20000;
 const MAX_FIELDS = 5;
+
+// Caméra (doivent correspondre aux transitions CSS de .world et .zoom-panel).
+const OUT_MS = 700;     // dézoom vers la vue d'ensemble
+const HOLD_MS = 500;    // vue d'ensemble : le paquet avance vers l'étape suivante
+const ZOOM = 3;         // grossissement maximal
+const FRAME_X = 0.23;   // position horizontale du nœud cadré (part de la largeur)
+const FRAME_FILL = 0.84; // part de la hauteur occupée par le bloc cadré (paquet → statut)
 
 type Mode = "live" | "tour" | "manual" | null;
 
@@ -24,18 +36,25 @@ export interface Chain {
 export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) => void }): Chain {
   const s = {
     snap: null as Snapshot | null,
-    focus: null as StageID | null, // étape mise en avant
+    focus: null as StageID | null,  // étape mise en avant (null = vue d'ensemble)
+    framed: null as StageID | null, // étape actuellement cadrée par la caméra
+    target: null as StageID | null, // cadrage visé (peut être en cours de transition)
     mode: null as Mode,
-    auto: true,                    // suivi automatique activé
+    auto: true,                     // suivi automatique activé
+    zoom: true,                     // false : vue d'ensemble figée, sans zoom
     tourTimer: undefined as ReturnType<typeof setInterval> | undefined,
+    tourIdx: -1,
     resumeTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+    cameraTimer: undefined as ReturnType<typeof setTimeout> | undefined,
     resumeAt: 0,
-    rendered: "",                  // clé du dernier rendu du spotlight (évite de reconstruire pour rien)
-    frozen: false,                 // pause présentateur ou rejeu
+    rendered: "",                   // clé du dernier rendu du panneau (évite de reconstruire pour rien)
+    frozen: false,                  // pause présentateur ou rejeu
   };
 
+  const viewport = $("#viewport");
+  const world = $("#world");
   const nodes = $<HTMLOListElement>("#nodes");
-  const spotlight = $("#spotlight");
+  const panel = $("#spotlight");
 
   // --- contrôles -------------------------------------------------------------
 
@@ -48,19 +67,22 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
     else { stopTour(); s.mode = "manual"; }
     render();
   });
+  $("#chain-overview").addEventListener("click", toggleOverview);
   document.addEventListener("keydown", (e) => {
     const target = e.target as Element | null;
-    if (!$("#drawer").hidden || target?.closest("input, textarea, select")) return;
+    if (!$("#drawer").hidden || target?.closest("input, textarea, select") || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "ArrowLeft") step(-1);
     else if (e.key === "ArrowRight") step(1);
+    else if (e.key === "o" || e.key === "O") toggleOverview();
   });
+  window.addEventListener("resize", () => applyCamera(s.framed, false));
 
   const ids = (): StageID[] => s.snap?.stages.map((st) => st.id) ?? [];
 
   function step(delta: number): void {
     const list = ids();
     if (!list.length) return;
-    const i = Math.max(0, s.focus ? list.indexOf(s.focus) : 0);
+    const i = s.focus ? list.indexOf(s.focus) : delta > 0 ? -1 : list.length;
     const next = list[(i + delta + list.length) % list.length];
     if (next) pick(next);
   }
@@ -69,6 +91,7 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
   function pick(id: StageID): void {
     stopTour();
     s.mode = "manual";
+    if (!s.zoom) toggleOverview(); // cliquer une étape réactive le zoom
     setFocus(id);
     clearTimeout(s.resumeTimer);
     if (s.auto) {
@@ -76,6 +99,12 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
       s.resumeTimer = setTimeout(() => { s.mode = null; decide(); render(); }, RESUME_MS);
     }
     render();
+  }
+
+  function toggleOverview(): void {
+    s.zoom = !s.zoom;
+    $("#chain-overview").setAttribute("aria-pressed", String(!s.zoom));
+    frame();
   }
 
   // --- logique de focus ------------------------------------------------------
@@ -92,17 +121,16 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
     }
   }
 
+  // Visite : vue d'ensemble, puis chaque étape, puis de nouveau la vue d'ensemble…
   function startTour(): void {
     s.mode = "tour";
-    if (!s.focus) {
-      const first = ids()[0];
-      if (first) setFocus(first);
-    }
+    s.tourIdx = -1;
+    setFocus(null);
     restartTourBar();
     s.tourTimer = setInterval(() => {
       const list = ids();
-      const next = list[((s.focus ? list.indexOf(s.focus) : -1) + 1) % list.length];
-      if (next) setFocus(next);
+      s.tourIdx = s.tourIdx + 1 >= list.length ? -1 : s.tourIdx + 1;
+      setFocus(s.tourIdx < 0 ? null : list[s.tourIdx] ?? null);
       restartTourBar();
       render();
     }, TOUR_MS);
@@ -120,29 +148,92 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
     bar.classList.add("run");
   }
 
-  function setFocus(id: StageID): void {
+  function setFocus(id: StageID | null): void {
     if (id === s.focus) return;
     s.focus = id;
-    s.rendered = "";
-    if (!reducedMotion()) {
-      spotlight.classList.remove("swap");
-      void spotlight.offsetWidth;
-      spotlight.classList.add("swap");
+    const st = id ? s.snap?.stages.find((x) => x.id === id) : undefined;
+    $("#chain-announce").textContent = st ? `Étape ${st.label} : ${STATUS_LABEL[st.status]}` : "Vue d'ensemble de la chaîne";
+    frame();
+  }
+
+  // --- caméra -------------------------------------------------------------------
+
+  // Décide du cadrage : zoom direct, ou dézoom → pause → rezoom entre deux étapes.
+  function frame(): void {
+    const target = s.zoom ? s.focus : null;
+    if (target === s.target) return;
+    s.target = target;
+    clearTimeout(s.cameraTimer);
+    const animate = !reducedMotion();
+    if (s.framed && target && s.framed !== target && animate) {
+      show(null);
+      s.cameraTimer = setTimeout(() => show(target), OUT_MS + HOLD_MS);
+    } else {
+      show(target);
     }
-    const st = s.snap?.stages.find((x) => x.id === id);
-    if (st) $("#chain-announce").textContent = `Étape ${st.label} : ${STATUS_LABEL[st.status]}`;
+  }
+
+  function show(id: StageID | null): void {
+    s.framed = id;
+    s.rendered = "";
+    viewport.dataset.zoom = id ? "in" : "out";
+    applyCamera(id, true);
+    render();
+  }
+
+  // Position d'un élément dans la scène, sans tenir compte du transform courant.
+  function offsetIn(node: HTMLElement): { x: number; y: number } {
+    let x = 0, y = 0;
+    let n: HTMLElement | null = node;
+    while (n && n !== world) {
+      x += n.offsetLeft;
+      y += n.offsetTop;
+      n = n.offsetParent as HTMLElement | null;
+    }
+    return { x, y };
+  }
+
+  function applyCamera(id: StageID | null, animated: boolean): void {
+    world.classList.toggle("no-anim", !animated);
+    const vw = viewport.clientWidth, vh = viewport.clientHeight;
+    const btn = id ? nodes.querySelector<HTMLElement>(`.node[data-stage="${id}"]`) : null;
+    const ring = btn?.querySelector<HTMLElement>(".node-ring");
+    if (!btn || !ring) {
+      // Vue d'ensemble : la scène entière, centrée verticalement.
+      world.style.transform = `translate(0px, ${Math.max(0, (vh - world.offsetHeight) / 2)}px) scale(1)`;
+      return;
+    }
+    // On cadre tout le bloc de l'étape : du haut du paquet au bas du statut.
+    const packet = $("#packet");
+    const top = Math.min(offsetIn(packet).y, offsetIn(btn).y);
+    const bottom = offsetIn(btn).y + btn.offsetHeight;
+    const r = offsetIn(ring);
+    const cx = r.x + ring.offsetWidth / 2;
+    const k = Math.min(ZOOM, (vh * FRAME_FILL) / (bottom - top));
+    const ty = (vh - k * (bottom - top)) / 2 - k * top;
+    world.style.transform = `translate(${vw * FRAME_X - k * cx}px, ${ty}px) scale(${k})`;
   }
 
   // --- rendu -------------------------------------------------------------------
 
+  function update(snap: Snapshot, frozen = false): void {
+    const first = !s.snap;
+    s.snap = snap;
+    s.frozen = frozen;
+    render();      // crée les nœuds avant de cadrer la caméra
+    decide();
+    if (first) applyCamera(s.framed, false);
+    render();
+  }
+
   function render(): void {
     if (!s.snap) return;
     const { stages, run } = s.snap;
-    const focused = stages.find((x) => x.id === s.focus) ?? stages[0];
     if (run) renderRunHeader(run);
     renderNodes(stages);
     renderTrack(stages, run);
-    if (focused) renderSpotlight(focused, stages);
+    const framed = s.framed ? stages.find((x) => x.id === s.framed) : undefined;
+    if (framed) renderPanel(framed, stages);
     renderMode();
   }
 
@@ -166,7 +257,7 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
       let li = nodes.children[i] as HTMLLIElement | undefined;
       if (!li) {
         // Créé une seule fois puis mis à jour sur place : garde le focus clavier.
-        const btn = el("button", { type: "button", class: "node", onclick: () => pick(st.id) },
+        const btn = el("button", { type: "button", class: "node", dataset: { stage: st.id }, onclick: () => pick(st.id) },
           el("span", { class: "node-ring" }, el("span", { class: "node-core" }, stageIcon(st.id))),
           el("span", { class: "node-index", text: String(i + 1).padStart(2, "0") }),
           el("span", { class: "node-label", text: st.label }),
@@ -181,7 +272,7 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
       btn.setAttribute("aria-pressed", String(focused));
       btn.setAttribute("aria-label", `${st.label} : ${STATUS_LABEL[st.status]}`);
       const steps = st.steps ?? [];
-      const done = steps.filter((x) => x.status === "success").length;
+      const done = steps.filter((x) => x.status === "success" || x.status === "skipped").length;
       const p = st.status === "success" ? 100 : steps.length ? (done / steps.length) * 100 : 0;
       btn.style.setProperty("--p", String(p));
       btn.querySelector(".node-status")?.replaceChildren(statusBadge(st.status));
@@ -205,11 +296,10 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
     const packet = $("#packet");
     packet.style.left = `${center(at, n)}%`;
     packet.dataset.status = status;
+    // Pendant un zoom, le paquet n'est visible que s'il est sur l'étape cadrée.
+    packet.dataset.away = String(s.framed !== null && list[at] !== s.framed);
     $("#packet-tag").textContent = run?.tag ?? s.snap?.prod.tag ?? "";
     $("#packet-note").textContent = status === "success" ? "en prod" : status === "failed" ? "bloquée" : "";
-
-    const focusIdx = s.focus ? Math.max(0, list.indexOf(s.focus)) : 0;
-    $("#caret").style.left = `${center(focusIdx, n)}%`;
   }
 
   function renderMode(): void {
@@ -224,14 +314,9 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
     else label.textContent = "suivi auto en pause";
   }
 
-  function update(snap: Snapshot, frozen = false): void {
-    s.snap = snap;
-    s.frozen = frozen;
-    decide();
-    render();
-  }
+  // --- panneau de détails (moitié droite quand on zoome) -------------------------
 
-  function renderSpotlight(st: Stage, stages: Stage[]): void {
+  function renderPanel(st: Stage, stages: Stage[]): void {
     // Reconstruit seulement si l'étape affichée a changé de contenu.
     const key = JSON.stringify([st.id, st.status, st.summary, st.steps, st.scans, st.fields, s.frozen]);
     if (key === s.rendered) return;
@@ -239,19 +324,18 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
     const i = stages.indexOf(st);
     const steps = st.steps ?? [];
 
-    const head = el("header", { class: "spot-head" },
-      el("div", { class: "spot-icon", dataset: { status: st.status } }, stageIcon(st.id)),
-      el("div", { class: "spot-title" },
+    const head = el("header", { class: "zp-head" },
+      el("div", {},
         el("span", { class: "eyebrow", text: `Étape ${String(i + 1).padStart(2, "0")} / ${String(stages.length).padStart(2, "0")}` }),
         el("h3", { text: st.label }),
-        el("div", { class: "spot-sub" }, statusBadge(st.status), el("span", { text: st.summary }))),
+        el("div", { class: "zp-sub" }, statusBadge(st.status), el("span", { text: st.summary }))),
       el("button", { type: "button", class: "btn", onclick: () => onOpenDetails(st.id) }, "Détails"));
 
-    spotlight.replaceChildren(head, el("div", { class: "spot-grid" },
-      el("section", { class: "spot-col" }, el("h4", { text: "Steps" }), stepsTimeline(steps)),
-      el("section", { class: "spot-col spot-term" }, el("h4", { text: "Journal" }), terminal(steps)),
-      el("section", { class: "spot-col" }, el("h4", { text: "Infos clés" }), keyInfo(st))));
-    const term = spotlight.querySelector<HTMLElement>(".terminal");
+    panel.replaceChildren(head, el("div", { class: "zp-grid" },
+      el("section", { class: "zp-col" }, el("h4", { text: "Steps" }), stepsTimeline(steps)),
+      el("section", { class: "zp-col" }, el("h4", { text: "Infos clés" }), keyInfo(st)),
+      el("section", { class: "zp-col zp-term" }, el("h4", { text: "Journal" }), terminal(steps))));
+    const term = panel.querySelector<HTMLElement>(".terminal");
     if (term) term.scrollTop = term.scrollHeight;
     tick();
   }
@@ -302,7 +386,7 @@ export function createChain({ onOpenDetails }: { onOpenDetails: (id: StageID) =>
 
   // Compteurs en direct (durée du step en cours, compte à rebours de reprise).
   function tick(): void {
-    for (const n of spotlight.querySelectorAll<HTMLElement>("[data-started]")) {
+    for (const n of panel.querySelectorAll<HTMLElement>("[data-started]")) {
       const started = n.dataset.started;
       if (started) n.textContent = fmtDur((Date.now() - new Date(started).getTime()) / 1000);
     }

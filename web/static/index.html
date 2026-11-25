@@ -45,6 +45,7 @@
           <span class="chain-mode" id="chain-mode"></span>
           <button type="button" class="icon-btn" id="chain-prev" aria-label="Étape précédente">◀</button>
           <button type="button" class="btn" id="chain-auto" aria-pressed="true">❚❚ Suivi auto</button>
+          <button type="button" class="btn" id="chain-overview" aria-pressed="false" title="Vue d'ensemble sans zoom (O)">Vue d'ensemble</button>
           <button type="button" class="icon-btn" id="chain-next" aria-label="Étape suivante">▶</button>
         </div>
       </div>
@@ -70,7 +71,7 @@
         </form>
         <p class="demo-msg" id="demo-msg" role="status"></p>
         <p class="demo-keys" aria-hidden="true">
-          <kbd>Espace</kbd> avancer · <kbd>Maj</kbd>+<kbd>Espace</kbd> reculer · <kbd>P</kbd> pause · <kbd>1</kbd>–<kbd>4</kbd> scénarios · <kbd>F</kbd> présentation · <kbd>←</kbd><kbd>→</kbd> étapes
+          <kbd>Espace</kbd> avancer · <kbd>Maj</kbd>+<kbd>Espace</kbd> reculer · <kbd>P</kbd> pause · <kbd>1</kbd>–<kbd>4</kbd> scénarios · <kbd>F</kbd> présentation · <kbd>O</kbd> vue d'ensemble · <kbd>←</kbd><kbd>→</kbd> étapes
         </p>
       </div>
       <p class="replay-banner" id="replay-banner" hidden>
@@ -78,24 +79,25 @@
         <button type="button" class="btn" id="replay-live">Revenir au direct</button>
       </p>
 
-      <div class="groups" aria-hidden="true">
-        <span class="group group-local">Déploiement statique · phobos</span>
-        <span class="group group-ci">Déploiement continu · Azure</span>
-      </div>
-
-      <div class="track" id="track">
-        <div class="track-line" aria-hidden="true"><div class="track-fill" id="track-fill"></div></div>
-        <div class="packet" id="packet" aria-hidden="true">
-          <span class="packet-box"></span>
-          <span class="packet-tag" id="packet-tag"></span>
-          <span class="packet-note" id="packet-note"></span>
+      <!-- Caméra : la « scène » (piste + nœuds) est zoomée sur l'étape en cours,
+           le panneau de détails glisse à droite ; entre deux étapes on dézoome. -->
+      <div class="viewport" id="viewport" data-zoom="out">
+        <div class="world" id="world">
+          <div class="groups" aria-hidden="true">
+            <span class="group group-local">Déploiement statique · phobos</span>
+            <span class="group group-ci">Déploiement continu · Azure</span>
+          </div>
+          <div class="track" id="track">
+            <div class="track-line" aria-hidden="true"><div class="track-fill" id="track-fill"></div></div>
+            <div class="packet" id="packet" aria-hidden="true">
+              <span class="packet-box"></span>
+              <span class="packet-tag" id="packet-tag"></span>
+              <span class="packet-note" id="packet-note"></span>
+            </div>
+            <ol class="nodes" id="nodes"></ol>
+          </div>
         </div>
-        <ol class="nodes" id="nodes"></ol>
-      </div>
-
-      <div class="spot-wrap">
-        <span class="caret" id="caret" aria-hidden="true"></span>
-        <article class="spotlight" id="spotlight"></article>
+        <article class="zoom-panel" id="spotlight"></article>
         <div class="tour-bar" id="tour-bar" hidden></div>
       </div>
       <p class="sr-only" id="chain-announce" aria-live="polite"></p>
