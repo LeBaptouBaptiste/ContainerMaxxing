@@ -61,21 +61,23 @@ type phaseDef struct {
 	ticks    int     // nombre de polls passés sur ce step
 }
 
+// Chaque étape dure au moins 3 polls (~6 s à 2 s/poll) : le frontend a le
+// temps de zoomer dessus et de laisser lire ses détails avant de passer à la suite.
 var phases = []phaseDef{
 	{model.StageImage, "Build multi-stage", 40, 80, 2},
 	{model.StageImage, "Trivy (local)", 15, 30, 1},
 	{model.StageImage, "Dockle (local)", 4, 8, 1},
 	{model.StagePhobos, "Connexion SSH", 1, 3, 1},
-	{model.StagePhobos, "git pull", 2, 5, 1},
+	{model.StagePhobos, "git pull", 2, 5, 2},
 	{model.StageCompose, "podman-compose up -d", 10, 25, 2},
 	{model.StageCompose, "Healthchecks", 5, 15, 1},
 	{model.StageGitHub, "git tag", 1, 2, 1},
-	{model.StageGitHub, "git push --tags", 2, 5, 1},
+	{model.StageGitHub, "git push --tags", 2, 5, 2},
 	{model.StageActions, "Checkout", 2, 5, 1},
 	{model.StageActions, "Build image", 45, 90, 2},
 	{model.StageActions, "Trivy scan", 20, 40, 1},
 	{model.StageActions, "Dockle lint", 5, 12, 1},
-	{model.StageGHCR, "Push GHCR", 10, 25, 1},
+	{model.StageGHCR, "Push GHCR", 10, 25, 2},
 	{model.StageGHCR, "Cosign sign", 4, 10, 1},
 	{model.StageCaaS, "cosign verify", 2, 5, 1},
 	{model.StageCaaS, "Deploy Container Apps", 30, 70, 2},
