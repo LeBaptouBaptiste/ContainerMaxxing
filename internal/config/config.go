@@ -26,6 +26,9 @@ type Config struct {
 	// uniquement en local (rien ne survit à un redémarrage).
 	DatabaseURL string // DATABASE_URL ou DATABASE_URL_FILE (contient le mot de passe)
 
+	// Cache Redis partagé entre instances. Vide = cache en mémoire du processus.
+	RedisURL string // REDIS_URL ou REDIS_URL_FILE (peut contenir le mot de passe)
+
 	// Contrôles de démo (scénarios, pause, pas à pas), disponibles uniquement
 	// avec la source mock : sans jeton en local, avec DEMO_TOKEN ailleurs.
 	DemoToken string // DEMO_TOKEN ou DEMO_TOKEN_FILE
@@ -60,6 +63,9 @@ func Load() (Config, error) {
 		return c, fmt.Errorf("INGEST_TOKEN trop court (32 caractères minimum)")
 	}
 	if c.DatabaseURL, err = secret("DATABASE_URL"); err != nil {
+		return c, err
+	}
+	if c.RedisURL, err = secret("REDIS_URL"); err != nil {
 		return c, err
 	}
 	if c.DemoToken, err = secret("DEMO_TOKEN"); err != nil {
