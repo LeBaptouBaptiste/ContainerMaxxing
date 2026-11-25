@@ -13,7 +13,7 @@ Image → phobos → Podman compose → GitHub → GitHub Actions → GHCR → C
 | # | Étape | État |
 |---|-------|------|
 | 1 | App Go + frontend avec données mockées | ✅ |
-| 2 | Dockerfile distroless + scans locaux (Trivy, Dockle) | ⏳ |
+| 2 | Dockerfile distroless + scans locaux (Trivy, Dockle) | ✅ 0 vulnérabilité, Dockle PASS |
 | 3 | compose : app, Postgres, Redis, durcissement (reverse proxy : NPM existant sur beacon) | 🟡 PostgreSQL et cache Redis côté app faits ; compose de prod à faire |
 | 4 | Déploiement statique sur phobos (podman-compose, exposé par NPM sur beacon) | ⏳ |
 | 5 | Branchement GitHub API | ⏳ |
@@ -205,6 +205,42 @@ défaut en mock, soit ~45 s par release, suivies de 30 s de pause). Chaque relea
 local) : le focus reste 20 s sur l'échec, et GHCR et Container Apps restent sur la version précédente, ce qui
 illustre la *quality gate*.
 
+## Image de conteneur
+
+Le `Dockerfile` construit l'image en trois étapes : TypeScript → JavaScript (`node`), binaire Go statique (`golang`),
+puis une image finale `gcr.io/distroless/static:nonroot` qui ne contient **que le binaire et la licence** (≈ 5,5 Mo
+compressée).
+
+```sh
+docker build -t containermaxxing:dev \
+  --build-arg VERSION=$(git describe --tags --always) \
+  --build-arg COMMIT=$(git rev-parse HEAD) \
+  --build-arg CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) .
+
+# lancement durci, comme dans le compose
+docker run --rm -p 127.0.0.1:8080:8080 --read-only --cap-drop ALL \
+  --security-opt no-new-privileges:true containermaxxing:dev
+```
+
+### Scans locaux (mêmes seuils que la CI)
+
+```sh
+sh scripts/scan.sh            # ou ENGINE=podman sh scripts/scan.sh
+```
+
+Le script construit l'image, puis lance :
+
+- **Trivy** : rapport complet (`reports/trivy.sarif`, `reports/trivy.txt`) et contrôle **bloquant sur HIGH/CRITICAL** ;
+- **Dockle** (CIS Docker Benchmark) : **bloquant dès le niveau WARN** (`reports/dockle.json`).
+
+Les exceptions sont versionnées et justifiées : `.trivyignore` (vide) et `.dockleignore` (seulement `CIS-DI-0005`,
+Docker Content Trust, remplacé par la signature cosign). Résultat actuel : **0 vulnérabilité, Dockle PASS**.
+
+> **Le scan a déjà servi** : la première image, compilée en Go 1.25.14, a été bloquée par Trivy (4 HIGH dans la
+> bibliothèque standard : `crypto/x509`, `net/http`, `crypto/tls`). Ces failles n'étaient corrigées que dans les
+> branches 1.26/1.27 : Go 1.25 n'est plus maintenu. Correction appliquée : passage à **Go 1.27.4** (et mise à jour des
+> dépendances), plutôt qu'une exception dans `.trivyignore`.
+
 ## Développement
 
 Ni Go ni Node ne sont nécessaires sur le poste, Docker suffit. L'environnement de dev reste lancé en
@@ -229,7 +265,7 @@ démarrage si `APP_ENV` n'est pas `local`**, pour ne jamais tourner en prod par 
 Tests et vérification des types :
 
 ```sh
-docker run --rm -v "$PWD:/src" -w /src golang:1.25-alpine go test ./...
+docker run --rm -v "$PWD:/src" -w /src golang:1.27-alpine go test ./...
 docker compose -f compose.dev.yaml exec web npm run typecheck
 ```
 
@@ -265,7 +301,22 @@ curl -X POST http://localhost:8080/api/deployments \
 | **Flux SSE limités** | 100 clients maximum (503 + `Retry-After` au-delà) ; diffusion non bloquante : un client lent ne ralentit pas les autres. |
 | **Erreurs et logs maîtrisés** | Le client reçoit un message générique, le détail reste dans les logs JSON. Pas de query string ni d'en-têtes (jetons) dans les logs. Récupération des panics. |
 | **Arrêt propre sur SIGTERM** | Indispensable en conteneur : les connexions en cours se terminent avant l'arrêt (rolling update de Container Apps, `podman-compose down`). |
-| **Sous-commande `healthcheck`** | L'image distroless n'aura ni `curl` ni shell : le binaire sait vérifier lui-même `/healthz` pour le `HEALTHCHECK`. |
+| **Sous-commande `healthcheck`** | L'image distroless n'a ni `curl` ni shell : le binaire vérifie lui-même `/healthz` pour le `HEALTHCHECK`. |
+
+### Étape 2 — image de conteneur
+
+| Choix | Pourquoi |
+|-------|----------|
+| **Build multi-stage** | Les outils de build (Node, compilateur Go, `npm`, sources) restent dans les étapes intermédiaires : l'image finale ne contient que le binaire. Moins de composants = moins de vulnérabilités possibles. |
+| **`distroless/static:nonroot`** | Ni shell, ni gestionnaire de paquets, ni libc : un attaquant qui exécuterait du code dans le conteneur n'a aucun outil à disposition (`sh` introuvable, vérifié). Trivy : 0 vulnérabilité sur la couche système. |
+| **Utilisateur non-root (65532)** | Le processus ne tourne pas en root ; le binaire appartient à root en lecture/exécution seule (`0555`), il ne peut pas être modifié par le processus qui l'exécute. |
+| **Binaire statique `CGO_ENABLED=0`, `-trimpath`, `-s -w`** | Aucune dépendance à une libc ; aucun chemin de la machine de build ni symbole de debug dans le binaire. |
+| **Images figées par empreinte (`@sha256:…`)** | Un tag (`:24-alpine`, `:nonroot`) peut être redirigé vers une autre image sur le registre ; une empreinte désigne un contenu exact. Idem pour les images de Trivy et Dockle dans `scripts/scan.sh`. |
+| **`npm ci --ignore-scripts` et `go mod verify`** | Installation reproductible depuis les fichiers de verrouillage, sans exécuter les scripts d'installation des paquets npm (vecteur classique d'attaque de la chaîne d'approvisionnement) ; modules Go vérifiés contre `go.sum`. |
+| **`.dockerignore` restrictif** | `.env`, `secrets/`, clés, `.git` ne sont jamais envoyés au contexte de build : impossible de les copier par erreur dans une couche de l'image. |
+| **Compatible lecture seule** | L'app n'écrit rien sur disque : le conteneur tourne avec `--read-only`, `--cap-drop ALL` et `no-new-privileges` (vérifié). |
+| **Labels OCI** | Source, licence (GPL-3.0), version, commit et date de build lisibles avec `docker inspect` : on sait toujours d'où vient une image. |
+| **Scans locaux avant la CI, sans socket Docker** | Trivy et Dockle analysent une archive de l'image (`docker save`) : ils ne reçoivent pas le socket Docker, qui donnerait un accès root à la machine. Les mêmes seuils qu'en CI permettent de corriger avant de pousser. |
 | **Requêtes SQL paramétrées** | Aucune valeur n'est concaténée dans le SQL (`$1, $2…`) : pas d'injection SQL possible depuis l'API d'ingestion. |
 | **Contraintes `CHECK` en base** | La base revalide les domaines (statuts, cible, digest `sha256:…`, `run_url` en `https://github.com/…`, compteurs ≥ 0) : même une écriture qui contournerait l'application ne peut pas stocker de valeur dangereuse. Défense en profondeur avec la validation de l'API. |
 | **`DATABASE_URL` traité comme un secret** | Il contient le mot de passe : lu de préférence depuis un fichier (`DATABASE_URL_FILE`), jamais journalisé, et les erreurs de parsing ne le recopient pas. |
