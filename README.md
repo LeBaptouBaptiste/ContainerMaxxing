@@ -14,12 +14,12 @@ Image → phobos → Podman compose → GitHub → GitHub Actions → GHCR → C
 |---|-------|------|
 | 1 | App Go + frontend avec données mockées | ✅ |
 | 2 | Dockerfile distroless + scans locaux (Trivy, Dockle) | ⏳ |
-| 3 | compose : Postgres, Redis, Caddy, durcissement | ⏳ |
+| 3 | compose : Postgres, Redis, Caddy, durcissement | 🟡 stockage PostgreSQL côté app fait ; compose de prod à faire |
 | 4 | Déploiement statique sur phobos (podman-compose + Nginx Proxy Manager) | ⏳ |
 | 5 | Branchement GitHub API | ⏳ |
 | 6 | Workflow CI (build → Trivy → Dockle → GHCR (ghcr.io) → cosign → CaaS) | ⏳ |
 | 7 | Déploiement Azure + branchement GHCR / Container Apps | ⏳ |
-| 8 | Finitions et mode démo | ⏳ |
+| 8 | Finitions et mode démo | 🟡 caméra, scénarios et mode présentateur faits |
 
 ## Architecture
 
@@ -29,7 +29,7 @@ internal/config/     configuration 100 % variables d'environnement
 internal/model/      types partagés + validation des entrées
 internal/source/     collecte de l'état (Mock aujourd'hui ; GitHub/GHCR/CaaS ensuite)
 internal/live/       polling périodique + diffusion SSE (hub)
-internal/store/      historique des déploiements (mémoire aujourd'hui ; PostgreSQL à l'étape 3)
+internal/store/      historique des déploiements : PostgreSQL (migrations/*.sql embarquées) ou mémoire
 internal/api/        routes HTTP, middlewares de sécurité
 web/src/             frontend en TypeScript strict, sans framework ni bundler
   ├─ chain.ts        chaîne animée : piste, nœuds, paquet, spotlight, focus automatique
@@ -109,6 +109,34 @@ Le bouton « Suivi auto » met le défilement en pause. Les animations sont dés
 
 Le serveur **interroge les sources lui-même** (polling toutes les 5 s par défaut) et pousse le dernier état aux
 navigateurs via Server-Sent Events. Le navigateur ne parle jamais à GitHub ni à Azure.
+
+### Base de données
+
+L'historique est stocké dans PostgreSQL 16 (conteneur `postgres:16-alpine` sur phobos, Azure Database for
+PostgreSQL Flexible Server sur Azure), via `DATABASE_URL`.
+
+- **Schéma** : `deployments` et `deployment_steps` (`internal/store/migrations/001_init.sql`). Par rapport au sujet,
+  `deployments` a en plus une colonne `status` (succès/échec, pour le taux d'échec) et `deployment_steps` une
+  colonne `position` (ordre des steps).
+- **Migrations au démarrage** : les fichiers `migrations/*.sql` sont embarqués dans le binaire et appliqués dans
+  l'ordre, ceux déjà passés étant notés dans `schema_migrations`. Tout se fait dans une transaction protégée par un
+  verrou consultatif (`pg_advisory_xact_lock`) : si plusieurs réplicas Container Apps démarrent ensemble, un seul
+  migre ; en cas d'erreur, rien n'est appliqué.
+- **Sans `DATABASE_URL`** : historique en mémoire, refusé hors `APP_ENV=local`.
+- **Redémarrage** : en mode mock, l'état (version en prod, dernier tag…) est reconstitué depuis la base, donc
+  l'historique continue après un `podman-compose down/up` au lieu de rejouer les mêmes versions.
+
+Démo de la persistance (le volume nommé survit à `down`, tant qu'on ne passe pas `-v`) :
+
+```sh
+podman-compose down && podman-compose up -d   # l'historique et les stats sont toujours là
+```
+
+Tests d'intégration sur une vraie base (schéma temporaire, supprimé à la fin) :
+
+```sh
+TEST_DATABASE_URL='postgres://user:pass@host:5432/db?sslmode=disable' go test ./internal/store/
+```
 
 ### API
 
@@ -196,6 +224,11 @@ curl -X POST http://localhost:8080/api/deployments \
 | **Erreurs et logs maîtrisés** | Le client reçoit un message générique, le détail reste dans les logs JSON. Pas de query string ni d'en-têtes (jetons) dans les logs. Récupération des panics. |
 | **Arrêt propre sur SIGTERM** | Indispensable en conteneur : les connexions en cours se terminent avant l'arrêt (rolling update de Container Apps, `podman-compose down`). |
 | **Sous-commande `healthcheck`** | L'image distroless n'aura ni `curl` ni shell : le binaire sait vérifier lui-même `/healthz` pour le `HEALTHCHECK`. |
+| **Requêtes SQL paramétrées** | Aucune valeur n'est concaténée dans le SQL (`$1, $2…`) : pas d'injection SQL possible depuis l'API d'ingestion. |
+| **Contraintes `CHECK` en base** | La base revalide les domaines (statuts, cible, digest `sha256:…`, `run_url` en `https://github.com/…`, compteurs ≥ 0) : même une écriture qui contournerait l'application ne peut pas stocker de valeur dangereuse. Défense en profondeur avec la validation de l'API. |
+| **`DATABASE_URL` traité comme un secret** | Il contient le mot de passe : lu de préférence depuis un fichier (`DATABASE_URL_FILE`), jamais journalisé, et les erreurs de parsing ne le recopient pas. |
+| **Chiffrement vers la base** | Sur Azure, connexion en `sslmode=verify-full` (certificat du serveur vérifié avec les autorités de l'image distroless). Sur phobos, la base est sur un réseau compose interne sans port publié. |
+| **Pool borné et timeouts** | 5 connexions max, 5 s max par requête, 5 s pour se connecter : une base lente ne bloque pas l'app ni n'épuise ses ressources. |
 | **Contrôles de démo cloisonnés** | Les routes `/api/demo/*` modifient l'état du serveur : elles n'existent qu'avec la source mock, sans jeton seulement si `APP_ENV=local`, et ailleurs uniquement si `DEMO_TOKEN` (32 caractères min., comparaison à temps constant) est configuré. Avec les vraies sources, la page reste en lecture seule. |
 | **Protection CSRF des commandes** | Les commandes exigent `Content-Type: application/json` : une page d'un autre site ne peut pas les envoyer sans requête CORS préliminaire, que le serveur n'accepte pas. Un en-tête `Origin` différent de l'hôte servi est refusé. Corps limité à 1 Kio, champs inconnus refusés, scénarios en liste blanche. |
 | **Jeton de démo côté navigateur** | Saisi par le présentateur, jamais livré avec la page, conservé en `sessionStorage` (effacé à la fermeture de l'onglet) et retiré dès qu'il est refusé. |
