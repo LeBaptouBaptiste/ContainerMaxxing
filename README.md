@@ -269,21 +269,26 @@ sh scripts/init-secrets.sh
 
 ### Lancer la pile
 
+Sur phobos, avec la configuration versionnée dans `deploy/phobos.env` (aucun secret) :
+
 ```sh
-sh scripts/init-secrets.sh          # une seule fois
-podman-compose up -d --build        # construit l'image et démarre app + postgres + redis
-podman-compose ps
+sh scripts/init-secrets.sh                                 # une seule fois
+podman-compose --env-file deploy/phobos.env up -d --build  # construit l'image et démarre app + postgres + redis
+podman-compose --env-file deploy/phobos.env ps
 ```
 
-Configuration non secrète surchargeable dans un `.env` (non commité) à côté de `compose.yaml` :
+Sans `--env-file`, le compose garde des valeurs sûres (`127.0.0.1:8080`) : pratique pour le tester sur un poste.
 
-| Variable | Défaut | Rôle |
-|----------|--------|------|
-| `APP_BIND` | `127.0.0.1` | interface où l'app publie son port : l'**IP privée de phobos**, joignable par beacon (jamais `0.0.0.0`) |
-| `APP_PORT` | `8080` | port publié, cible du proxy host NPM |
-| `APP_ENV` | `phobos` | environnement affiché dans le bandeau |
-| `DATA_SOURCE` | `mock` | source des données |
-| `APP_IMAGE` | `localhost/containermaxxing:latest` | nom de l'image construite (ou image GHCR) |
+| Variable | Défaut du compose | phobos (`deploy/phobos.env`) | Rôle |
+|----------|-------------------|------------------------------|------|
+| `APP_BIND` | `127.0.0.1` | `172.22.0.1` | interface privée où l'app publie son port, joignable par le NPM de beacon (jamais `0.0.0.0`) |
+| `APP_PORT` | `8080` | `11262` | port publié, cible du proxy host NPM |
+| `APP_ENV` | `phobos` | `phobos` | environnement affiché dans le bandeau |
+| `CAAS_APP` | `containers2v` | `containers2v` | nom de la Container App affiché dans l'étape « Container Apps » |
+| `DATA_SOURCE` | `mock` | — | source des données |
+| `APP_IMAGE` | `localhost/containermaxxing:latest` | — | nom de l'image construite (ou image GHCR) |
+
+Le proxy host NPM de `containers2v-statique.voyager3.fr` doit donc viser `http://172.22.0.1:11262`.
 
 - **App** : construite depuis le `Dockerfile`, seul service qui publie un port.
 - **PostgreSQL 16** : volume nommé `pgdata` (survit à `podman-compose down`, pas à `down -v`), authentification
