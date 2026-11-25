@@ -28,7 +28,7 @@ services:
     secrets: [database_url, redis_url, ingest_token]
     ports:
       # Interface privée de phobos uniquement (jamais 0.0.0.0), pour le NPM de beacon.
-      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8080"
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-11262}:8080"
     depends_on: [postgres, redis]
     restart: unless-stopped
 
