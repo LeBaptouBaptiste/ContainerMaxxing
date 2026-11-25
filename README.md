@@ -32,7 +32,28 @@ internal/live/       polling périodique + diffusion SSE (hub)
 internal/store/      historique des déploiements (mémoire aujourd'hui ; PostgreSQL à l'étape 3)
 internal/api/        routes HTTP, middlewares de sécurité
 web/static/          frontend HTML/CSS/JS sans dépendance, embarqué dans le binaire (go:embed)
+  ├─ chain.js        chaîne animée : piste, nœuds, paquet, spotlight, focus automatique
+  ├─ app.js          bandeau, flux SSE, panneau de détails, historique, comparaison
+  └─ dom.js          helpers DOM partagés (création sûre d'éléments, icônes, formats)
 ```
+
+### La chaîne animée
+
+C'est l'élément central de la page. Une release est représentée par un **paquet** (l'image et son tag) qui
+avance sur une piste de 7 nœuds. Chaque nœud a un anneau qui se remplit au fil des steps de l'étape, et un
+**spotlight** sous la piste détaille l'étape mise en avant : ses steps avec chronomètre, un journal façon
+terminal et les infos clés (scans Trivy/Dockle, digest, signature…).
+
+Le focus change tout seul, selon trois modes :
+
+| Mode | Quand | Comportement |
+|------|-------|--------------|
+| suivi en direct | une release est en cours ou vient d'échouer | le focus suit l'étape active (`run.stage` du snapshot) |
+| visite automatique | rien ne tourne | les étapes défilent toutes les 5 s (barre de progression sous le spotlight) |
+| sélection manuelle | clic sur un nœud, ◀ ▶ ou flèches du clavier | le focus est figé, puis le suivi auto reprend après 20 s |
+
+Le bouton « Suivi auto » met le défilement en pause. Les animations sont désactivées si le système demande
+`prefers-reduced-motion`.
 
 Le serveur **interroge les sources lui-même** (polling toutes les 5 s par défaut) et pousse le dernier état aux
 navigateurs via Server-Sent Events. Le navigateur ne parle jamais à GitHub ni à Azure.
@@ -51,10 +72,14 @@ navigateurs via Server-Sent Events. Le navigateur ne parle jamais à GitHub ni �
 
 ### Mode mock (étape 1)
 
-`DATA_SOURCE=mock` simule une chaîne vivante : un historique de 11 déploiements est pré-chargé, puis un nouveau
-run CI démarre toutes les ~20 s et avance d'un step à chaque poll. **Un run sur quatre échoue au scan Trivy**
-(vulnérabilité fictive `MOCK-CVE-0001`) : on voit alors l'ACR et Container Apps rester sur la version précédente,
-ce qui illustre la *quality gate*.
+`DATA_SOURCE=mock` simule une chaîne vivante. Un historique de 11 déploiements est pré-chargé, puis des releases
+successives parcourent **les 7 étapes dans l'ordre** (17 steps, un par poll ; `POLL_INTERVAL` vaut 2 s par
+défaut en mock, soit ~45 s par release, suivies de 30 s de pause). Chaque release enregistre un déploiement
+`phobos` (après les healthchecks) et un déploiement `azure` (fin de CI).
+
+**Une release sur quatre échoue au scan Trivy de la CI** (vulnérabilité fictive `MOCK-CVE-0001`, absente au scan
+local) : le focus reste 20 s sur l'échec, et l'ACR et Container Apps restent sur la version précédente, ce qui
+illustre la *quality gate*.
 
 ## Lancer en local
 
