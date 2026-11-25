@@ -73,7 +73,10 @@ Le cadrage change tout seul, selon trois modes :
 | visite automatique | rien ne tourne | vue d'ensemble, puis zoom sur chaque étape tour à tour (7 s par plan) |
 | sélection manuelle | clic sur un nœud, ◀ ▶ ou flèches du clavier | la caméra reste sur cette étape, puis le suivi auto reprend après 20 s |
 
-Le bouton « Vue d'ensemble » (touche `O`) désactive le zoom et garde toute la chaîne à l'écran.
+Tant que le zoom est actif, la page passe en **mode scène** : la chaîne occupe toute la fenêtre (seul le bandeau
+de version reste en haut). Le bouton « Vue d'ensemble » (touche `O`) coupe le zoom et revient à la page classique,
+avec l'historique sous la chaîne ; « Mode scène » y revient. Le bouton « Plein écran » (touche `F`) passe en plus
+le navigateur en plein écran (l'API Fullscreen exige un clic ou une touche, elle ne peut pas s'activer seule).
 
 ### Mode démo et présentateur
 
@@ -94,7 +97,8 @@ Dans les trois cas d'échec, la prod reste sur la version précédente.
 | `P` | pause / lecture de la release (côté serveur : tous les écrans ouverts suivent) |
 | `Espace` | termine le step en cours, pour commenter chaque étape à son rythme |
 | `Maj` + `Espace` | revient sur un état précédent de la release (rejeu local, ne change rien côté serveur) |
-| `F` | mode présentation : chaîne en pleine largeur, texte agrandi, historique masqué |
+| `F` | plein écran du navigateur |
+| `O` | vue d'ensemble : page classique avec l'historique / retour au mode scène |
 | `←` `→` | change l'étape mise en avant |
 
 Une release terminée n'est jamais relancée par `Espace` : un appui de trop ne doit pas effacer l'écran d'échec
