@@ -22,6 +22,14 @@
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+/* Progression de l'anneau des nœuds (0–100). Déclarée comme nombre pour que le
+   navigateur sache l'interpoler : sans ça, une variable CSS change d'un coup. */
+@property --p {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
 * { box-sizing: border-box; }
 [hidden] { display: none !important; } /* l'attribut hidden l'emporte toujours sur display */
 html, body { margin: 0; }
@@ -159,7 +167,9 @@ main { max-width: 1440px; margin: 0 auto; padding: 28px; display: grid; gap: 40p
 }
 .viewport[data-zoom="out"] .world { transition-duration: 0.45s; }
 .world.no-anim { transition: none; }
-.groups, .node, .packet { transition: opacity 0.3s var(--ease), left 0.5s var(--ease); }
+.groups, .packet { transition: opacity 0.3s var(--ease), left 0.5s var(--ease); }
+/* --p (progression de l'anneau) est typée via @property : elle s'anime au lieu de sauter */
+.node { transition: opacity 0.3s var(--ease), --p 0.9s var(--ease); }
 /* pendant le zoom, seule l'étape cadrée reste visible */
 .viewport[data-zoom="in"] .groups,
 .viewport[data-zoom="in"] .node[data-focus="false"],
