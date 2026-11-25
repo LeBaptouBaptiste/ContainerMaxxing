@@ -6,6 +6,7 @@
 #         sert le frontend depuis le disque (DEV_MODE) et recharge le navigateur.
 # - web : recompile web/src/*.ts vers web/static/js/ à chaque modification.
 # - db  : PostgreSQL 16 ; l'historique survit aux redémarrages (volume pgdata-dev).
+# - redis : cache partagé (pas de persistance) ; l'app continue s'il est arrêté.
 name: containermaxxing-dev
 
 services:
@@ -19,6 +20,7 @@ services:
       APP_ENV: local
       GOFLAGS: -buildvcs=false
       DATABASE_URL: postgres://containermaxxing@db:5432/containermaxxing?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "127.0.0.1:8080:8080" # loopback uniquement : pas exposé sur le réseau
     volumes:
@@ -27,6 +29,8 @@ services:
       - gomod:/go/pkg/mod
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
@@ -52,6 +56,18 @@ services:
       - pgdata-dev:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "containermaxxing", "-d", "containermaxxing"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # Pur cache : pas de persistance sur disque, mémoire bornée, éviction LRU.
+    # DEV UNIQUEMENT sans mot de passe (aucun port publié) ; en prod : --requirepass via un secret.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 3s
       timeout: 3s
       retries: 20
