@@ -269,21 +269,26 @@ sh scripts/init-secrets.sh
 
 ### Lancer la pile
 
+Sur phobos, avec la configuration versionnée dans `deploy/phobos.env` (aucun secret) :
+
 ```sh
-sh scripts/init-secrets.sh          # une seule fois
-podman-compose up -d --build        # construit l'image et démarre app + postgres + redis
-podman-compose ps
+sh scripts/init-secrets.sh                                 # une seule fois
+podman-compose --env-file deploy/phobos.env up -d --build  # construit l'image et démarre app + postgres + redis
+podman-compose --env-file deploy/phobos.env ps
 ```
 
-Configuration non secrète surchargeable dans un `.env` (non commité) à côté de `compose.yaml` :
+Sans `--env-file`, le compose garde des valeurs sûres (`127.0.0.1:8080`) : pratique pour le tester sur un poste.
 
-| Variable | Défaut | Rôle |
-|----------|--------|------|
-| `APP_BIND` | `127.0.0.1` | interface où l'app publie son port : l'**IP privée de phobos**, joignable par beacon (jamais `0.0.0.0`) |
-| `APP_PORT` | `8080` | port publié, cible du proxy host NPM |
-| `APP_ENV` | `phobos` | environnement affiché dans le bandeau |
-| `DATA_SOURCE` | `mock` | source des données |
-| `APP_IMAGE` | `localhost/containermaxxing:latest` | nom de l'image construite (ou image GHCR) |
+| Variable | Défaut du compose | phobos (`deploy/phobos.env`) | Rôle |
+|----------|-------------------|------------------------------|------|
+| `APP_BIND` | `127.0.0.1` | `172.22.0.1` | interface privée où l'app publie son port, joignable par le NPM de beacon (jamais `0.0.0.0`) |
+| `APP_PORT` | `8080` | `11262` | port publié, cible du proxy host NPM |
+| `APP_ENV` | `phobos` | `phobos` | environnement affiché dans le bandeau |
+| `CAAS_APP` | `containers2v` | `containers2v` | nom de la Container App affiché dans l'étape « Container Apps » |
+| `DATA_SOURCE` | `mock` | — | source des données |
+| `APP_IMAGE` | `localhost/containermaxxing:latest` | — | nom de l'image construite (ou image GHCR) |
+
+Le proxy host NPM de `containers2v-statique.voyager3.fr` doit donc viser `http://172.22.0.1:11262`.
 
 - **App** : construite depuis le `Dockerfile`, seul service qui publie un port.
 - **PostgreSQL 16** : volume nommé `pgdata` (survit à `podman-compose down`, pas à `down -v`), authentification
@@ -308,6 +313,16 @@ d'une PR empilée contient aussi ses commits ; ils disparaissent du diff dès qu
 Côté sécurité, le workflow n'utilise aucune action tierce (seulement `gh`), tourne avec le jeton éphémère du run et
 des permissions minimales (`pull-requests: read`, `statuses: write`), et ne place jamais la description de la PR
 dans le script (pas d'injection de commande possible).
+
+**Redémarrage automatique** : les services sont en `restart: always`. Podman ne relance pas au démarrage de la
+machine les conteneurs en `unless-stopped` ; les conteneurs `always` sont relancés par le service systemd
+`podman-restart`, à activer une fois pour l'utilisateur rootless (avec le linger, pour qu'il tourne sans session
+ouverte) :
+
+```sh
+sudo loginctl enable-linger cmaxxing
+systemctl --user enable --now podman-restart.service
+```
 
 ## Développement
 
@@ -410,3 +425,5 @@ curl -X POST http://localhost:8080/api/deployments \
 | **Secrets en fichiers** | Montés dans `/run/secrets` et lus via `*_FILE` : jamais dans l'environnement ni dans `podman inspect`. |
 | **Redis protégé par ACL** | Mot de passe obligatoire, commandes dangereuses interdites à l'app (`FLUSHALL`, `CONFIG`, `KEYS`…), utilisateur de sonde limité à `PING`. |
 | **Port publié sur l'IP privée** | `APP_BIND` vaut `127.0.0.1` par défaut et doit être réglé sur l'IP privée de phobos : jamais `0.0.0.0`. |
+| **Réseaux séparés** | `backend` est `internal: true` : PostgreSQL et Redis n'ont aucun accès à Internet (impossible d'exfiltrer des données ou de télécharger un outil) et ne peuvent pas publier de port. Seule l'app est aussi sur `edge`, le réseau qui porte son port publié (et, plus tard, ses appels à GitHub/Azure). |
+| **Sondes de santé et démarrage ordonné** | Chaque service a une sonde (`/server healthcheck` pour l'app distroless, `pg_isready`, `PING` Redis via un utilisateur ACL limité à cette commande) ; l'app ne démarre qu'une fois PostgreSQL et Redis `healthy` (`depends_on: condition: service_healthy`). Une sonde qui échoue rend la panne visible au lieu de laisser un service à moitié démarré. |
