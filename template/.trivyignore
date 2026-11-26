@@ -1,0 +1,3 @@
+# Vulnérabilités volontairement ignorées par Trivy.
+# Règle : une ligne par CVE, avec la raison et une date de réexamen.
+# Toute entrée doit être justifiée en revue de code ; le fichier est vide par défaut.
