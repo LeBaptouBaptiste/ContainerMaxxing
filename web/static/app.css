@@ -70,6 +70,11 @@ h2 { font-size: 15px; font-weight: 600; margin: 0; }
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--text-3); border: 1px dashed var(--border); padding: 2px 8px; border-radius: 6px;
 }
+.env-switch {
+  font-size: 12.5px; padding: 2px 9px; border-radius: 6px;
+  border: 1px solid var(--accent); white-space: nowrap;
+}
+.env-switch:hover { background: var(--surface-2); text-decoration: none; }
 .live { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
 .live[data-state="open"] .live-dot { background: var(--good); }

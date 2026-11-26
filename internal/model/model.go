@@ -123,6 +123,8 @@ type Snapshot struct {
 	Environment string    `json:"environment"` // environnement qui sert la page : local | phobos | azure
 	Source      string    `json:"source"`      // mock | live
 	AppVersion  string    `json:"app_version"`
+	PhobosURL   string    `json:"phobos_url"` // URL publique de phobos (lien de bascule)
+	AzureURL    string    `json:"azure_url"`  // URL publique d'Azure Container Apps
 	Prod        ProdInfo  `json:"prod"`
 	Run         *RunInfo  `json:"run,omitempty"`
 	Demo        *DemoInfo `json:"demo,omitempty"`

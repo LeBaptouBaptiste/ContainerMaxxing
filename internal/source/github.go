@@ -36,13 +36,13 @@ type GitHub struct {
 }
 
 type liveCfg struct {
-	env, repo, phobosURL string
+	env, repo, phobosURL, azureURL string
 }
 
 func NewGitHub(c config.Config, api GitHubAPI, version string) *GitHub {
 	return &GitHub{
 		api: api, version: version, now: time.Now,
-		cfg:      liveCfg{env: c.Environment, repo: c.GitHubRepo, phobosURL: c.PhobosURL},
+		cfg:      liveCfg{env: c.Environment, repo: c.GitHubRepo, phobosURL: c.PhobosURL, azureURL: c.AzureURL},
 		workflow: c.GitHubWorkflow, branch: c.GitHubBranch,
 	}
 }
@@ -90,6 +90,8 @@ func (g *GitHub) Poll(ctx context.Context) (model.Snapshot, error) {
 		Environment: g.cfg.env,
 		Source:      "live",
 		AppVersion:  g.version,
+		PhobosURL:   g.cfg.phobosURL,
+		AzureURL:    g.cfg.azureURL,
 		Prod:        g.prodInfo(runs),
 		GeneratedAt: now,
 	}

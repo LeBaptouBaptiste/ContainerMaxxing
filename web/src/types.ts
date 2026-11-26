@@ -88,6 +88,8 @@ export interface Snapshot {
   environment: "local" | "phobos" | "azure";
   source: "mock" | "live";
   app_version: string;
+  phobos_url: string;
+  azure_url: string;
   prod: ProdInfo;
   run?: RunInfo;
   demo?: DemoInfo;
