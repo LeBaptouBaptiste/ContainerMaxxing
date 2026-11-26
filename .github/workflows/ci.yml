@@ -76,7 +76,12 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           CREATED: ${{ steps.meta.outputs.created }}
+          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
         run: |
+          # Images de build durcies (DHI) : connexion limitée à cette étape, retirée ensuite
+          echo "$DHI_TOKEN" | docker login dhi.io -u "$DHI_USERNAME" --password-stdin
+          trap 'docker logout dhi.io' EXIT
           docker build --pull \
             --build-arg VERSION="$VERSION" \
             --build-arg COMMIT="$GITHUB_SHA" \
