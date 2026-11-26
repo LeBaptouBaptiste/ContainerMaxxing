@@ -1,0 +1,9 @@
+nodes_modules/
+.env
+.git*
+.*ignore
+compose*
+README.md
+.github/
+deploy/
+secrets/
