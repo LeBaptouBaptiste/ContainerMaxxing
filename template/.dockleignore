@@ -1,0 +1,6 @@
+# Règles Dockle volontairement ignorées, avec leur justification.
+#
+# CIS-DI-0005 « Enable Content trust for Docker » : Docker Content Trust (Notary v1)
+# est remplacé par la signature cosign keyless de l'image (Sigstore), vérifiée
+# avant chaque déploiement. Niveau INFO, non bloquant de toute façon.
+CIS-DI-0005

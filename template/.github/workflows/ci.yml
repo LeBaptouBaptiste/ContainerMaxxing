@@ -1,0 +1,51 @@
+# CI/CD de l'image : appelle la CI réutilisable de ContainerMaxxing.
+# Copier en .github/workflows/ci.yml et adapter les lignes « À ADAPTER ».
+#
+#   pull_request → build + Trivy + Dockle + SBOM + audit de la CI ; rien n'est publié
+#   push main    → + publication GHCR signée (cosign keyless) + SBOM attesté
+#   push tag v*  → + déploiement Azure Container Apps (si aca-app) + release GitHub
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    name: CI
+    # Plafond des permissions ; chaque job du workflow appelé n'en reçoit qu'une partie.
+    permissions:
+      contents: write          # release GitHub, graphe de dépendances
+      packages: write          # push GHCR
+      id-token: write          # cosign keyless, login Azure OIDC
+      security-events: write   # SARIF de l'audit de la CI
+      actions: read            # audit de la CI, date de début du run
+    # Épingler une version (tag ou SHA) plutôt que @main pour ne pas subir les changements.
+    uses: LeBaptouBaptiste/ContainerMaxxing/.github/workflows/container-ci.yml@main
+    with:
+      # À ADAPTER : image GHCR du projet, en minuscules.
+      image: ghcr.io/mon-org/mon-app
+      # Images de build DHI : secrets DHI_USERNAME / DHI_TOKEN au niveau du dépôt.
+      dhi-login: true
+      # Facultatif : déploiement Azure Container Apps sur chaque tag v*.
+      # Secrets AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID dans l'environnement « prod ».
+      # aca-app: mon-app
+      # aca-resource-group: rg-mon-app
+      # app-url: https://mon-app.example.com
+    # Seuls les secrets du dépôt utiles au build (pas « secrets: inherit », qui les
+    # transmettrait tous). Les secrets Azure sont lus par le job de déploiement dans
+    # l'environnement « prod » : ils ne sont pas à transmettre ici.
+    secrets:
+      DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+      DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
