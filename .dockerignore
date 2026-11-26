@@ -1,5 +1,5 @@
-nodes_modules/
-.env
+node_modules/
+.env*
 .git*
 .*ignore
 compose*
@@ -7,3 +7,5 @@ README.md
 .github/
 deploy/
 secrets/
+reports/
+web/static/js/
