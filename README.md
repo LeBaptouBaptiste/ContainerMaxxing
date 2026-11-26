@@ -13,13 +13,17 @@ Image → phobos → Podman compose → GitHub → GitHub Actions → GHCR → C
 | # | Étape | État |
 |---|-------|------|
 | 1 | App Go + frontend avec données mockées | ✅ |
-| 2 | Dockerfile distroless + scans locaux (Trivy, Dockle) | ✅ 0 vulnérabilité, Dockle PASS |
-| 3 | compose : app, Postgres, Redis, durcissement (reverse proxy : NPM existant sur beacon) | ✅ |
-| 4 | Déploiement statique sur phobos (podman-compose, exposé par NPM sur beacon) | 🟡 configuration prête (`deploy/phobos.env`), déploiement à faire |
-| 5 | Branchement GitHub API | ⏳ |
-| 6 | Workflow CI (build → Trivy → Dockle → GHCR (ghcr.io) → cosign → CaaS) | ⏳ |
-| 7 | Déploiement Azure + branchement GHCR / Container Apps | ⏳ |
-| 8 | Finitions et mode démo | 🟡 caméra, scénarios et mode présentateur faits |
+| 2 | Dockerfile distroless (étapes de build sur images durcies DHI) + scans locaux (Trivy, Dockle) | ✅ 0 vulnérabilité HIGH/CRITICAL, Dockle PASS |
+| 3 | compose : app, Postgres, Redis en images DHI, durcissement (reverse proxy : NPM existant sur beacon) | ✅ |
+| 4 | Déploiement statique sur phobos (podman-compose, exposé par NPM sur beacon) | ✅ [containers2v-statique.voyager3.fr](https://containers2v-statique.voyager3.fr), source mock (démo) |
+| 5 | Branchement GitHub API | ✅ commits, tags, runs, steps et extraits de journaux de la CI |
+| 6 | Workflow CI (build → Trivy → Dockle → SBOM → GHCR → cosign → Container Apps) | ✅ + audit de la CI (plumber), attestation SBOM, release GitHub |
+| 7 | Déploiement Azure Container Apps (OIDC, par digest signé) | ✅ [containers2v.voyager3.fr](https://containers2v.voyager3.fr), source live, v1.3.0 |
+| 8 | Finitions et mode démo | 🟡 caméra, scénarios, mode présentateur et lien phobos ↔ Azure faits ; README sécurité en cours |
+
+Les deux déploiements coexistent : **phobos** sert la démo (`DATA_SOURCE=mock`, scénarios pilotables) et **Azure**
+la vraie chaîne (`DATA_SOURCE=live`, alimentée par l'API GitHub et le rapport de la CI). Un lien dans le bandeau
+passe de l'un à l'autre.
 
 ## Architecture
 
@@ -27,7 +31,8 @@ Image → phobos → Podman compose → GitHub → GitHub Actions → GHCR → C
 cmd/server/          point d'entrée (serveur + sous-commande `healthcheck`)
 internal/config/     configuration 100 % variables d'environnement
 internal/model/      types partagés + validation des entrées
-internal/source/     collecte de l'état (Mock aujourd'hui ; GitHub/GHCR/CaaS ensuite)
+internal/source/     collecte de l'état : Mock (démo) ou GitHub (runs, jobs, extraits de journaux)
+internal/github/     client de l'API GitHub (cache, ETag, quota)
 internal/live/       polling périodique + diffusion SSE (hub)
 internal/store/      historique des déploiements : PostgreSQL (migrations/*.sql embarquées) ou mémoire
 internal/cache/      cache à durée de vie courte : Redis (partagé) ou mémoire, tolérant aux pannes
@@ -39,8 +44,12 @@ web/src/             frontend en TypeScript strict, sans framework ni bundler
   └─ types.ts        types des réponses de l'API, alignés sur internal/model
 web/static/          index.html + app.css ; js/ = sortie de tsc (non commitée)
                      le tout embarqué dans le binaire (go:embed)
-scripts/             boucles de rechargement à chaud de l'environnement de dev
+scripts/             scan.sh (Trivy + Dockle), init-secrets.sh, boucles de rechargement à chaud du dev
+deploy/phobos.env    configuration de phobos (aucun secret)
+Dockerfile           image de prod (multi-stage, distroless)
+compose.yaml         pile de prod sur phobos (app + PostgreSQL + Redis)
 compose.dev.yaml     environnement de dev (jamais en prod)
+.github/workflows/   ci.yml (CI/CD), dependances.yml (PR empilées), azure-login-test.yml (test OIDC)
 ```
 
 Le frontend est compilé par `tsc` (TypeScript 7), seule dépendance npm, et uniquement en dépendance de dev : le
@@ -52,8 +61,8 @@ npm ci && npm run build   # web/src/*.ts → web/static/js/*.js
 go build ./cmd/server     # embarque web/static/ dans le binaire
 ```
 
-Pour le Dockerfile, il faut donc un stage `node` (`npm ci && npm run build`) dont on copie `web/static/js` dans
-le stage Go avant la compilation.
+C'est ce que fait le `Dockerfile` : une étape `node` compile le TypeScript, puis l'étape Go récupère
+`web/static/js` avant la compilation.
 
 ### La chaîne animée
 
@@ -113,8 +122,8 @@ navigateurs via Server-Sent Events. Le navigateur ne parle jamais à GitHub ni �
 
 ### Base de données
 
-L'historique est stocké dans PostgreSQL 16 (conteneur `postgres:16-alpine` sur phobos, Azure Database for
-PostgreSQL Flexible Server sur Azure), via `DATABASE_URL`.
+L'historique est stocké dans PostgreSQL 16 (conteneur `dhi.io/postgres:16` sur phobos, Azure Database for
+PostgreSQL Flexible Server `pg-containers2v-es` sur Azure), via `DATABASE_URL`.
 
 - **Schéma** : `deployments` et `deployment_steps` (`internal/store/migrations/001_init.sql`). Par rapport au sujet,
   `deployments` a en plus une colonne `status` (succès/échec, pour le taux d'échec) et `deployment_steps` une
@@ -130,7 +139,8 @@ PostgreSQL Flexible Server sur Azure), via `DATABASE_URL`.
 Démo de la persistance (le volume nommé survit à `down`, tant qu'on ne passe pas `-v`) :
 
 ```sh
-podman-compose down && podman-compose up -d   # l'historique et les stats sont toujours là
+podman-compose --env-file deploy/phobos.env down
+podman-compose --env-file deploy/phobos.env up -d   # l'historique et les stats sont toujours là
 ```
 
 Tests d'intégration sur une vraie base (schéma temporaire, supprimé à la fin) :
@@ -141,9 +151,8 @@ TEST_DATABASE_URL='postgres://user:pass@host:5432/db?sslmode=disable' go test ./
 
 ### Cache Redis
 
-Le cache (`internal/cache`) se place devant les sources lentes ou soumises à quota. Il sert aujourd'hui à
-l'historique (liste, détail, stats lus depuis PostgreSQL) et servira aux API GitHub et Azure quand les vraies
-sources remplaceront le mock.
+Le cache (`internal/cache`) se place devant les sources lentes ou soumises à quota : l'historique (liste, détail,
+stats lus depuis PostgreSQL) et les appels à l'API GitHub en mode live.
 
 - **Redis partagé** (`REDIS_URL`) : toutes les instances (conteneurs, réplicas Container Apps) partagent le même
   cache, donc une API amont n'est appelée qu'une fois par durée de vie, quel que soit le nombre d'instances ou de
@@ -155,9 +164,9 @@ sources remplaceront le mock.
 - **Tolérant aux pannes** : si Redis est arrêté ou lent (500 ms max par commande), l'app interroge directement la
   source et continue de fonctionner ; l'incident est journalisé au plus une fois toutes les 30 s.
 
-Configuration recommandée côté infra (c'est un pur cache) : pas de persistance (`--save "" --appendonly no`),
-mémoire bornée avec éviction (`--maxmemory 64mb --maxmemory-policy allkeys-lru`), mot de passe
-(`--requirepass` via un secret), aucun port publié, réseau interne uniquement.
+Configuration dans le compose (c'est un pur cache) : pas de persistance (`--save "" --appendonly no`),
+mémoire bornée avec éviction (`--maxmemory 64mb --maxmemory-policy allkeys-lru`), accès contrôlé par un fichier
+ACL monté en secret (`--aclfile`), aucun port publié, réseau interne uniquement.
 
 ### Exposition sur phobos (Nginx Proxy Manager sur beacon)
 
@@ -197,8 +206,8 @@ Internet ─HTTPS─▶ NPM (beacon) ─HTTP─▶ app (phobos, seul port publi�
 ### Mode mock (étape 1)
 
 `DATA_SOURCE=mock` simule une chaîne vivante. Un historique de 11 déploiements est pré-chargé, puis des releases
-successives parcourent **les 7 étapes dans l'ordre** (17 steps, un par poll ; `POLL_INTERVAL` vaut 2 s par
-défaut en mock, soit ~45 s par release, suivies de 30 s de pause). Chaque release enregistre un déploiement
+successives parcourent **les 7 étapes dans l'ordre** (18 steps sur 25 polls, chaque étape restant au moins le
+temps d'être lue ; `POLL_INTERVAL` vaut 2 s par défaut en mock, soit ~50 s par release, suivies de 30 s de pause). Chaque release enregistre un déploiement
 `phobos` (après les healthchecks) et un déploiement `azure` (fin de CI).
 
 **Une release sur quatre échoue au scan Trivy de la CI** (vulnérabilité fictive `MOCK-CVE-0001`, absente au scan
@@ -214,13 +223,15 @@ ne contacte jamais GitHub et ne voit jamais le jeton) :
 |-------|---------|
 | GitHub | dernier commit de `GITHUB_BRANCH` (sha, message, auteur, date), dernier tag semver |
 | GitHub Actions | dernier run de `GITHUB_WORKFLOW` (défaut `ci.yml`), ses steps et leurs durées |
-| GHCR / Container Apps | steps des jobs `publish` / `deploy` du même workflow (Dev 6/7) |
+| GHCR / Container Apps | steps des jobs dont le nom contient `publish` / `deploy` dans ce même workflow |
+| Journal | extraits du journal de chaque step, découpés depuis le journal du job publié par GitHub en fin de job |
 | Release suivie | le dernier run de la CI : la caméra se place sur l'étape du job en cours ou en échec |
 | Version en prod | tag du dernier run réussi déclenché par un tag |
+| Historique | déploiements enregistrés par le job « Rapport vers l'app » de la CI (`POST /api/deployments`) |
 
-Les étapes qui ne sont pas encore reliées à des données réelles (image, compose…) sont marquées « non branché »
-plutôt que d'afficher des valeurs simulées. Tant que `ci.yml` n'existe pas, l'étape Actions l'indique et liste les
-derniers runs du dépôt.
+Les étapes qui ne sont pas reliées à des données réelles (image locale, phobos, compose) sont marquées
+« non branché » plutôt que d'afficher des valeurs simulées. L'étape phobos n'est considérée comme réelle que sur
+phobos lui-même (`APP_ENV=phobos`).
 
 **Quota d'API** : 5 000 requêtes/h avec un jeton, 60/h sans. Le client (`internal/github`) cumule un cache partagé
 (Redis) avec une durée de vie par ressource, des requêtes conditionnelles (`If-None-Match` : une réponse 304
@@ -233,11 +244,15 @@ Contents: Read, Metadata: Read), fourni via `GITHUB_TOKEN_FILE`.
 
 ## Image de conteneur
 
-Le `Dockerfile` construit l'image en trois étapes : TypeScript → JavaScript (`node`), binaire Go statique (`golang`),
-puis une image finale `gcr.io/distroless/static:nonroot` qui ne contient **que le binaire et la licence** (≈ 5,5 Mo
-compressée).
+Le `Dockerfile` construit l'image en trois étapes : TypeScript → JavaScript (`dhi.io/node:24-alpine3.22-dev`),
+binaire Go statique (`dhi.io/golang:1.27-dev`), puis une image finale `gcr.io/distroless/static:nonroot` qui ne
+contient **que le binaire et la licence** (≈ 6 Mo).
+
+Les étapes de build utilisent les **Docker Hardened Images** (DHI) : il faut être connecté au registre une fois,
+avec un compte Docker qui y a accès (la CI le fait avec les secrets `DHI_USERNAME` / `DHI_TOKEN`).
 
 ```sh
+docker login dhi.io
 docker build -t containermaxxing:dev \
   --build-arg VERSION=$(git describe --tags --always) \
   --build-arg COMMIT=$(git rev-parse HEAD) \
@@ -260,7 +275,7 @@ Le script construit l'image, puis lance :
 - **Dockle** (CIS Docker Benchmark) : **bloquant dès le niveau WARN** (`reports/dockle.json`).
 
 Les exceptions sont versionnées et justifiées : `.trivyignore` (vide) et `.dockleignore` (seulement `CIS-DI-0005`,
-Docker Content Trust, remplacé par la signature cosign). Résultat actuel : **0 vulnérabilité, Dockle PASS**.
+Docker Content Trust, remplacé par la signature cosign). Résultat actuel : **0 vulnérabilité HIGH/CRITICAL, Dockle PASS**.
 
 > **Le scan a déjà servi** : la première image, compilée en Go 1.25.14, a été bloquée par Trivy (4 HIGH dans la
 > bibliothèque standard : `crypto/x509`, `net/http`, `crypto/tls`). Ces failles n'étaient corrigées que dans les
@@ -304,25 +319,61 @@ podman-compose --env-file deploy/phobos.env up -d --build  # construit l'image e
 podman-compose --env-file deploy/phobos.env ps
 ```
 
-Sans `--env-file`, le compose publie l'app sur `127.0.0.1:11262` (boucle locale) : pratique pour le tester sur un poste.
+**`--env-file` est obligatoire** : le compose ne contient aucune valeur par défaut (podman-compose gère mal la
+syntaxe `${VAR:-défaut}`), toutes les variables sont dans `deploy/phobos.env`. Pour tester la pile sur un poste,
+où `172.22.0.1` n'existe pas : `APP_BIND=127.0.0.1 docker compose --env-file deploy/phobos.env up -d --build`.
 
-| Variable | Défaut du compose | phobos (`deploy/phobos.env`) | Rôle |
-|----------|-------------------|------------------------------|------|
-| `APP_BIND` | `127.0.0.1` | `172.22.0.1` | interface privée où l'app publie son port, joignable par le NPM de beacon (jamais `0.0.0.0`) |
-| `APP_PORT` | `11262` | `11262` | port publié, cible du proxy host NPM |
-| `APP_ENV` | `phobos` | `phobos` | environnement affiché dans le bandeau |
-| `CAAS_APP` | `containers2v` | `containers2v` | nom de la Container App affiché dans l'étape « Container Apps » |
-| `DATA_SOURCE` | `mock` | — | source des données |
-| `APP_IMAGE` | `localhost/containermaxxing:latest` | — | nom de l'image construite (ou image GHCR) |
+| Variable | phobos (`deploy/phobos.env`) | Rôle |
+|----------|------------------------------|------|
+| `APP_BIND` | `172.22.0.1` | interface privée où l'app publie son port, joignable par le NPM de beacon (jamais `0.0.0.0`) |
+| `APP_PORT` | `11262` | port publié, cible du proxy host NPM |
+| `APP_ENV` | `phobos` | environnement affiché dans le bandeau |
+| `DATA_SOURCE` | `mock` | source des données (démo pilotable) |
+| `LOG_LEVEL` | `info` | niveau des logs JSON |
+| `GITHUB_REPOSITORY`, `PHOBOS_URL`, `AZURE_URL`, `GHCR_IMAGE`, `CAAS_APP` | valeurs du projet | informations publiques affichées dans les panneaux et le lien phobos ↔ Azure |
+| `APP_IMAGE` | `localhost/containermaxxing:latest` | nom de l'image construite |
 
-Le proxy host NPM de `containers2v-statique.voyager3.fr` doit donc viser `http://172.22.0.1:11262`.
+Le proxy host NPM de `containers2v-statique.voyager3.fr` vise `http://172.22.0.1:11262`.
 
-- **App** : construite depuis le `Dockerfile`, seul service qui publie un port.
-- **PostgreSQL 16** : volume nommé `pgdata` (survit à `podman-compose down`, pas à `down -v`), authentification
-  `scram-sha-256`, mot de passe lu depuis le secret.
-- **Redis 7** : pur cache (pas de persistance, 64 Mo, éviction LRU), accès contrôlé par le fichier ACL.
+| Service | Image | Utilisateur | Détails |
+|---------|-------|-------------|---------|
+| `app` | construite depuis le `Dockerfile` | `65532` | seul service qui publie un port ; réseaux `edge` et `backend` |
+| `postgres` | `dhi.io/postgres:16-alpine3.22` | `70` | volume nommé `pgdata` sur `/var/lib/postgresql/data` (survit à `down`, pas à `down -v`), `scram-sha-256`, mot de passe lu depuis le secret |
+| `redis` | `dhi.io/redis:8` | `65532` | pur cache (pas de persistance, 64 Mo, éviction LRU), accès contrôlé par le fichier ACL |
 
-Démo de persistance : `podman-compose down && podman-compose up -d` → l'historique est intact.
+Les images sont figées par empreinte (`@sha256:…`) ; le serveur doit être connecté à `dhi.io` pour les télécharger.
+
+Démo de persistance : `podman-compose --env-file deploy/phobos.env down`, puis `up -d` → l'historique est intact.
+
+**Redémarrage automatique** : les services sont en `restart: always`. Podman ne relance pas au démarrage de la
+machine les conteneurs en `unless-stopped` ; les conteneurs `always` sont relancés par le service `podman-restart`,
+configuré sur phobos pour l'utilisateur dédié `cmaxxing`.
+
+## CI/CD et déploiement Azure
+
+Le workflow `.github/workflows/ci.yml` enchaîne les contrôles ; chaque déclencheur va plus ou moins loin :
+
+| Déclencheur | Jobs |
+|-------------|------|
+| Pull request vers `main` | **Build & scan** (build, Trivy, Dockle, SBOM, politique de sécurité) + **Audit CI** (plumber). Rien n'est publié. |
+| Push sur `main` | + **Publish GHCR + cosign** (tags `main` et `sha-xxxxxxx`, signature et attestation SBOM) + **Graphe de dépendances** GitHub |
+| Tag `vX.Y.Z` | + **Deploy Azure Container Apps** (par digest, après revérification de la signature, puis smoke test) + **Rapport vers l'app** + **Release GitHub** (SBOM et rapports de scan joints) |
+
+La release se fait donc en posant un tag sur `main` :
+
+```sh
+git tag v1.4.0 && git push origin v1.4.0
+```
+
+Côté Azure :
+
+- **Container App** `containers2v` (groupe de ressources `rg-caas`), domaine `containers2v.voyager3.fr` avec certificat
+  managé, port cible 8080, `DATA_SOURCE=live`.
+- **Base** : Azure Database for PostgreSQL Flexible Server `pg-containers2v-es`, connexion en `sslmode=verify-full`.
+- **Connexion de la CI** : OIDC (credential fédéré lié à l'environnement GitHub `prod`), sans secret longue durée.
+- **Secrets GitHub** : `DHI_USERNAME` / `DHI_TOKEN` au niveau du dépôt (build) ; `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+  `AZURE_SUBSCRIPTION_ID` et `INGEST_TOKEN` dans l'environnement `prod` (déploiement et rapport uniquement).
+
 ## Workflow Git
 
 Le travail avance par **petites PR**, une par sous-tâche (voire par étape). Quand une étape s'appuie sur la
@@ -341,15 +392,8 @@ Côté sécurité, le workflow n'utilise aucune action tierce (seulement `gh`), 
 des permissions minimales (`pull-requests: read`, `statuses: write`), et ne place jamais la description de la PR
 dans le script (pas d'injection de commande possible).
 
-**Redémarrage automatique** : les services sont en `restart: always`. Podman ne relance pas au démarrage de la
-machine les conteneurs en `unless-stopped` ; les conteneurs `always` sont relancés par le service systemd
-`podman-restart`, à activer une fois pour l'utilisateur rootless (avec le linger, pour qu'il tourne sans session
-ouverte) :
-
-```sh
-sudo loginctl enable-linger cmaxxing
-systemctl --user enable --now podman-restart.service
-```
+La branche `main` est protégée par un ruleset : PR obligatoire avec une approbation (l'auteur ne peut pas approuver
+sa propre PR), statut `dependances` requis, branche à jour avant fusion, ni suppression ni `push --force`.
 
 ## Développement
 
@@ -401,7 +445,7 @@ curl -X POST http://localhost:8080/api/deployments \
 |-------|----------|
 | **Go, binaire unique, bibliothèque standard uniquement** | Aucune dépendance tierce à cette étape → surface de chaîne d'approvisionnement minimale. Le binaire statique (`CGO_ENABLED=0`) tournera dans une image *distroless* sans libc ni shell. |
 | **Frontend TypeScript sans framework ni CDN, embarqué via `go:embed`** | Une seule dépendance npm (`typescript`), en dépendance de dev uniquement et en version exacte figée dans `package-lock.json` : elle sert à compiler, rien de tiers n'est envoyé au navigateur. Le mode strict détecte à la compilation les accès à des champs absents de l'API. Pas de script chargé depuis un autre domaine, rien à monter à côté du binaire : toute la page vient de la même origine. |
-| **Polling côté serveur** | Les jetons GitHub/Azure restent sur le serveur ; le frontend ne reçoit que des données publiques déjà filtrées. Le cache Redis (étape 3) évitera de dépasser les quotas d'API quel que soit le nombre de visiteurs. |
+| **Polling côté serveur** | Les jetons GitHub/Azure restent sur le serveur ; le frontend ne reçoit que des données publiques déjà filtrées. Le cache Redis évite de dépasser les quotas d'API quel que soit le nombre de visiteurs. |
 | **Aucun secret dans le code ni dans le frontend** | Toute la configuration passe par l'environnement. Les secrets supportent la variante `*_FILE` (ex. `INGEST_TOKEN_FILE`) pour être montés comme fichiers plutôt qu'exposés dans `podman inspect`. |
 | **Content-Security-Policy stricte** | `default-src 'self'`, pas de script ni de style inline, `frame-ancestors 'none'` (anti-clickjacking), `object-src 'none'`, `base-uri 'none'`. Complétée par `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, COOP/CORP. |
 | **Pas de `innerHTML` côté client** | Toutes les données sont insérées via `textContent`/`createElement` : une valeur malveillante en base reste du texte (pas de XSS stockée). Les liens ne sont rendus que s'ils sont en `https:`. |
@@ -421,9 +465,10 @@ curl -X POST http://localhost:8080/api/deployments \
 | **`distroless/static:nonroot`** | Ni shell, ni gestionnaire de paquets, ni libc : un attaquant qui exécuterait du code dans le conteneur n'a aucun outil à disposition (`sh` introuvable, vérifié). Trivy : 0 vulnérabilité sur la couche système. |
 | **Utilisateur non-root (65532)** | Le processus ne tourne pas en root ; le binaire appartient à root en lecture/exécution seule (`0555`), il ne peut pas être modifié par le processus qui l'exécute. |
 | **Binaire statique `CGO_ENABLED=0`, `-trimpath`, `-s -w`** | Aucune dépendance à une libc ; aucun chemin de la machine de build ni symbole de debug dans le binaire. |
-| **Images figées par empreinte (`@sha256:…`)** | Un tag (`:24-alpine`, `:nonroot`) peut être redirigé vers une autre image sur le registre ; une empreinte désigne un contenu exact. Idem pour les images de Trivy et Dockle dans `scripts/scan.sh`. |
+| **Étapes de build sur Docker Hardened Images** | Node et Go viennent des images durcies de Docker (`dhi.io`) : surface minimale et correctifs suivis par l'éditeur. Les outils de build ne sont de toute façon pas dans l'image finale, mais un outil compromis à la compilation pourrait altérer le binaire. |
+| **Images figées par empreinte (`@sha256:…`)** | Un tag (`:24-alpine3.22-dev`, `:nonroot`) peut être redirigé vers une autre image sur le registre ; une empreinte désigne un contenu exact. Idem pour les images de Trivy et Dockle dans `scripts/scan.sh` et la CI. |
 | **`npm ci --ignore-scripts` et `go mod verify`** | Installation reproductible depuis les fichiers de verrouillage, sans exécuter les scripts d'installation des paquets npm (vecteur classique d'attaque de la chaîne d'approvisionnement) ; modules Go vérifiés contre `go.sum`. |
-| **`.dockerignore` restrictif** | `.env`, `secrets/`, clés, `.git` ne sont jamais envoyés au contexte de build : impossible de les copier par erreur dans une couche de l'image. |
+| **`.dockerignore` restrictif** | `.env*`, `secrets/`, clés (`*.pem`, `*.key`), `.git`, rapports de scan et archives ne sont jamais envoyés au contexte de build : impossible de les copier par erreur dans une couche de l'image. |
 | **Compatible lecture seule** | L'app n'écrit rien sur disque : le conteneur tourne avec `--read-only`, `--cap-drop ALL` et `no-new-privileges` (vérifié). |
 | **Labels OCI** | Source, licence (GPL-3.0), version, commit et date de build lisibles avec `docker inspect` : on sait toujours d'où vient une image. |
 | **Scans locaux avant la CI, sans socket Docker** | Trivy et Dockle analysent une archive de l'image (`docker save`) : ils ne reçoivent pas le socket Docker, qui donnerait un accès root à la machine. Les mêmes seuils qu'en CI permettent de corriger avant de pousser. |
@@ -444,16 +489,17 @@ curl -X POST http://localhost:8080/api/deployments \
 
 | Choix | Pourquoi |
 |-------|----------|
-| **Aucun conteneur en root** | L'app tourne en `65532`, PostgreSQL en `70`, Redis en `999` dès le démarrage : les entrypoints n'ont pas besoin de passer par root puis de changer d'utilisateur. Un processus compromis n'a pas les droits root dans le conteneur. |
+| **Images durcies (DHI) figées par empreinte** | PostgreSQL et Redis viennent de `dhi.io` : images minimales (Redis n'a même pas de shell), non-root par défaut, et l'empreinte garantit que phobos exécute exactement l'image vérifiée. |
+| **Aucun conteneur en root** | L'app tourne en `65532`, PostgreSQL en `70`, Redis en `65532` dès le démarrage : les entrypoints n'ont pas besoin de passer par root puis de changer d'utilisateur. Un processus compromis n'a pas les droits root dans le conteneur. |
 | **`cap_drop: [ALL]`** | Aucune capacité Linux (changer de propriétaire, ouvrir un port < 1024, contourner les droits de fichiers…) : c'est possible parce qu'aucun service ne démarre en root. |
 | **`no-new-privileges`** | Un binaire setuid ne peut pas élever ses privilèges, même s'il en existait un dans l'image. |
 | **`read_only: true`** | Système de fichiers en lecture seule pour les trois services : un attaquant ne peut ni déposer un outil ni modifier un binaire. Seuls restent inscriptibles le volume `pgdata` et des `tmpfs` en mémoire (socket et fichiers temporaires de PostgreSQL). |
 | **Limites de ressources** | Mémoire (`mem_limit`) et nombre de processus (`pids_limit`) bornés par service : une fuite mémoire ou une « fork bomb » reste confinée à son conteneur. |
 | **Secrets en fichiers** | Montés dans `/run/secrets` et lus via `*_FILE` : jamais dans l'environnement ni dans `podman inspect`. |
 | **Redis protégé par ACL** | Mot de passe obligatoire, commandes dangereuses interdites à l'app (`FLUSHALL`, `CONFIG`, `KEYS`…), utilisateur de sonde limité à `PING`. |
-| **Port publié sur l'IP privée** | `APP_BIND` vaut `127.0.0.1` par défaut et doit être réglé sur l'IP privée de phobos : jamais `0.0.0.0`. |
+| **Port publié sur l'IP privée** | `APP_BIND` vaut `172.22.0.1`, l'IP privée de phobos joignable par beacon : jamais `0.0.0.0`. Postgres et Redis ne publient aucun port. |
 | **Réseaux séparés** | `backend` est `internal: true` : PostgreSQL et Redis n'ont aucun accès à Internet (impossible d'exfiltrer des données ou de télécharger un outil) et ne peuvent pas publier de port. Seule l'app est aussi sur `edge`, le réseau qui porte son port publié (et, plus tard, ses appels à GitHub/Azure). |
-| **Sondes de santé et démarrage ordonné** | Chaque service a une sonde (`/server healthcheck` pour l'app distroless, `pg_isready`, `PING` Redis via un utilisateur ACL limité à cette commande) ; l'app ne démarre qu'une fois PostgreSQL et Redis `healthy` (`depends_on: condition: service_healthy`). Une sonde qui échoue rend la panne visible au lieu de laisser un service à moitié démarré. |
+| **Sondes de santé et démarrage ordonné** | Chaque service a une sonde (`/app/server healthcheck` pour l'app distroless, `pg_isready`, `PING` Redis via un utilisateur ACL limité à cette commande) ; l'app ne démarre qu'une fois PostgreSQL et Redis `healthy` (`depends_on: condition: service_healthy`). Une sonde qui échoue rend la panne visible au lieu de laisser un service à moitié démarré. |
 
 ### Étape 5 — branchement de l'API GitHub
 
@@ -466,3 +512,20 @@ curl -X POST http://localhost:8080/api/deployments \
 | **Réponses bornées** | 2 Mio maximum par réponse, 10 s maximum par requête, textes venant de l'API tronqués et affichés en texte (jamais en HTML). |
 | **Respect du quota** | Cache partagé, requêtes conditionnelles (304), 404 mémorisés, arrêt complet jusqu'à la réinitialisation en cas de quota épuisé : l'app ne martèle jamais l'API. |
 | **Pas de fausses données en live** | Une étape non reliée à une source réelle est affichée « non branché » au lieu de valeurs simulées : ce qui est à l'écran est vérifiable. |
+
+### Étapes 6 et 7 — CI/CD et déploiement Azure
+
+| Choix | Pourquoi |
+|-------|----------|
+| **Actions tierces épinglées par SHA** | Un tag d'action (`@v4`) peut être déplacé par son auteur ou par un attaquant qui le compromet ; un SHA de commit désigne un code exact. Trivy et Dockle tournent depuis leur image officielle figée par empreinte. |
+| **Permissions minimales par job** | `contents: read` par défaut ; seul le job qui en a besoin reçoit `packages: write`, `id-token: write`, `security-events: write` ou `contents: write`. Un job compromis ne peut pas faire plus que sa tâche. |
+| **Aucun secret longue durée pour publier et déployer** | GHCR avec le `GITHUB_TOKEN` éphémère du run, Azure et Sigstore en OIDC : il n'existe pas de mot de passe Azure ni de clé de signature à voler. Seuls le jeton d'ingestion et le jeton DHI (lecture seule) sont des secrets, et les secrets Azure/ingestion sont limités à l'environnement `prod`. |
+| **Connexion à `dhi.io` limitée au build** | `docker login` juste avant le build, `docker logout` juste après : les identifiants ne restent pas sur le runner pendant les scans. |
+| **Politique de sécurité bloquante** | Le build échoue si Trivy trouve une CVE HIGH/CRITICAL corrigeable ou un secret dans l'image, ou si Dockle remonte un contrôle FATAL. |
+| **On publie exactement l'image scannée** | L'image est exportée après le build et rechargée telle quelle pour le push : pas de second build qui pourrait différer de ce qui a été vérifié. |
+| **Signature keyless cosign + attestation SBOM** | L'image est signée par l'identité OIDC du workflow (certificat Fulcio, journal public Rekor) ; le SBOM CycloneDX est attesté sur le même digest. On peut prouver d'où vient l'image et ce qu'elle contient. |
+| **Signature revérifiée avant le déploiement** | `cosign verify` exige l'identité exacte du workflow : une image poussée à la main sur GHCR, même avec le bon tag, ne passe pas. Container Apps ne vérifiant pas les signatures lui-même, ce contrôle est fait par la CI. |
+| **Déploiement par digest** | La Container App reçoit `image@sha256:…`, jamais un tag mutable : ce qui tourne en prod est exactement l'image signée. Un smoke test vérifie ensuite que la nouvelle version est bien servie. |
+| **Graphe de dépendances et alertes** | Le SBOM est envoyé au graphe de dépendances de GitHub : une CVE publiée après la release déclenche une alerte Dependabot. |
+| **Audit de la CI (plumber)** | Chaque PR vérifie la CI elle-même (actions épinglées, permissions, déclencheurs dangereux) ; résultats dans *Security → Code scanning*. Rapport non bloquant pour l'instant, le temps d'atteindre le score maximal. |
+| **Fusion contrôlée** | `main` n'accepte que des PR approuvées par l'autre membre, à jour, avec les statuts requis au vert. |
