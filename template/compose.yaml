@@ -1,0 +1,160 @@
+# Template : pile durcie app + PostgreSQL + Redis pour podman-compose ou docker compose.
+# Copier en « compose.yaml » à la racine du projet et adapter les lignes « À ADAPTER ».
+#
+#   sh scripts/init-secrets.sh                            # une seule fois : secrets/
+#   podman-compose --env-file app.env up -d --build
+#
+# Toutes les variables viennent de app.env (voir app.env.example) : pas de valeur par
+# défaut « ${VAR:-…} », que podman-compose gère mal.
+#
+# PostgreSQL ou Redis inutile : supprimer le service, ses secrets (ici et dans le bloc
+# « secrets » de l'app), son entrée dans « depends_on » et, pour PostgreSQL, le volume.
+
+# À ADAPTER : nom du projet. Il préfixe les volumes : le changer plus tard fait repartir
+# la base d'un volume vide.
+name: mon-app
+
+services:
+  app:
+    image: ${APP_IMAGE}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Seul service qui publie un port, sur une interface précise (jamais 0.0.0.0) :
+    # 127.0.0.1 derrière un reverse proxy local, l'IP privée sinon.
+    ports:
+      - "${APP_BIND}:${APP_PORT}:8080"
+    networks:
+      - edge
+      - backend
+    # À ADAPTER : variables de l'application. Les secrets ne passent jamais en clair :
+    # l'app lit le fichier indiqué par chaque variable *_FILE.
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL}
+      DATABASE_URL_FILE: /run/secrets/database_url
+      REDIS_URL_FILE: /run/secrets/redis_url
+    secrets:
+      - database_url
+      - redis_url
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # À ADAPTER : même utilisateur que l'image (65532 pour Dockerfile.go, 1000 pour Dockerfile.node).
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    mem_reservation: 256m
+    pids_limit: 100
+    # always : podman ne relance pas les conteneurs « unless-stopped » au démarrage de la machine.
+    restart: always
+    # Redéfini ici : podman ignore le HEALTHCHECK de l'image.
+    healthcheck:
+      # À ADAPTER : Dockerfile.go → binaire ; Dockerfile.node → commande ci-dessous.
+      test: ["CMD", "/app/app", "healthcheck"]
+      # test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  postgres:
+    # Image durcie (non-root, sans shell superflu), figée par empreinte.
+    image: dhi.io/postgres:16-alpine3.22@sha256:206e4a72fda5b9edab43a7105034080e1399a5af1c0c54eac38d4490c24ac457
+    # Réseau interne uniquement : ni port publié, ni accès à Internet.
+    networks:
+      - backend
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # Mot de passe exigé même en local (pas d'accès « trust »).
+      POSTGRES_INITDB_ARGS: "--auth-local=scram-sha-256 --auth-host=scram-sha-256"
+    secrets:
+      - postgres_password
+    # Monté sur le PGDATA de l'image, dossier qui appartient à l'utilisateur 70 : un volume
+    # neuf en hérite. Ailleurs (ex. /var/lib/postgresql/data, absent de l'image DHI), le
+    # volume appartiendrait à root et initdb échouerait.
+    volumes:
+      - pgdata:/var/lib/postgresql/16/data
+    # Seuls emplacements inscriptibles avec read_only : socket et fichiers temporaires.
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
+    user: "70:70"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    mem_reservation: 128m
+    pids_limit: 150
+    restart: always
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "app", "-d", "app", "-h", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    # Image durcie sans shell, figée par empreinte.
+    image: dhi.io/redis:8@sha256:616c45858da8f165b8e910d2637fda78f80e24ec0f5866564b1d5821ecd00098
+    networks:
+      - backend
+    secrets:
+      - redis_acl
+    tmpfs:
+      - /tmp
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    mem_reservation: 64m
+    pids_limit: 64
+    restart: always
+    # Pur cache : pas de persistance, mémoire bornée avec éviction, accès par ACL.
+    # Un argument par élément ; "no" entre guillemets (sinon lu comme un booléen).
+    command:
+      - redis-server
+      - --aclfile
+      - /run/secrets/redis_acl
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - allkeys-lru
+    # Utilisateur ACL « healthcheck » limité à PING (pas de shell dans l'image : forme CMD).
+    healthcheck:
+      test: ["CMD", "redis-cli", "--user", "healthcheck", "--pass", "healthcheck", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+# Fichiers générés par scripts/init-secrets.sh, montés dans /run/secrets/<nom>.
+secrets:
+  database_url:
+    file: secrets/database_url
+  redis_url:
+    file: secrets/redis_url
+  postgres_password:
+    file: secrets/postgres_password
+  redis_acl:
+    file: secrets/redis_acl
+
+volumes:
+  pgdata: {}
+
+networks:
+  # Réseau de l'app : porte le port publié et ses appels sortants.
+  edge: {}
+  # Réseau interne : PostgreSQL et Redis n'ont aucun accès à Internet.
+  backend:
+    internal: true
