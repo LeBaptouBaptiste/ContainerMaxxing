@@ -21,6 +21,8 @@ type GitHubAPI interface {
 	WorkflowRuns(ctx context.Context, workflow string, n int) ([]github.Run, error)
 	RecentRuns(ctx context.Context, n int) ([]github.Run, error)
 	Jobs(ctx context.Context, runID int64) ([]github.Job, error)
+	JobLogs(ctx context.Context, jobID int64) (string, error)
+	RunLogs(ctx context.Context, runID int64) ([]byte, error)
 }
 
 // GitHub est la source « live » : les étapes GitHub et GitHub Actions (et GHCR /
@@ -33,6 +35,7 @@ type GitHub struct {
 	now      func() time.Time
 	workflow string
 	branch   string
+	logs     jobLogCache
 }
 
 type liveCfg struct {
@@ -79,11 +82,17 @@ func (g *GitHub) Poll(ctx context.Context) (model.Snapshot, error) {
 		}
 	}
 
+	// Extraits de journaux des jobs terminés (panneau « Journal »).
+	logs, err := g.logs.logsFor(ctx, g.api, run, jobs)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("journaux des jobs: %w", err))
+	}
+
 	// Steps de la CI répartis par étape, selon le nom du job.
 	byStage := map[model.StageID][]model.Step{}
 	for _, j := range jobs {
 		id := stageForJob(j.Name)
-		byStage[id] = append(byStage[id], jobSteps(j)...)
+		byStage[id] = append(byStage[id], jobSteps(j, logs[j.ID])...)
 	}
 
 	snap := model.Snapshot{
@@ -290,13 +299,14 @@ func stageForJob(name string) model.StageID {
 }
 
 // jobSteps convertit les steps d'un job, sans les steps techniques ajoutés par GitHub.
-func jobSteps(j github.Job) []model.Step {
+// logs : extraits de journal par numéro de step (nil si le job n'est pas terminé).
+func jobSteps(j github.Job, logs map[int]string) []model.Step {
 	var out []model.Step
 	for _, s := range j.Steps {
-		if s.Name == "Set up job" || s.Name == "Complete job" || strings.HasPrefix(s.Name, "Post ") {
+		if isTechnicalStep(s.Name) {
 			continue
 		}
-		st := model.Step{Name: truncate(s.Name, 80), Status: ghStatus(s.Status, s.Conclusion)}
+		st := model.Step{Name: truncate(s.Name, 80), Status: ghStatus(s.Status, s.Conclusion), Log: logs[s.Number]}
 		if s.StartedAt != nil {
 			t := *s.StartedAt
 			st.StartedAt = &t

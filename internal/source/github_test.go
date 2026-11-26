@@ -19,6 +19,7 @@ type fakeAPI struct {
 	runsErr   error
 	recent    []github.Run
 	jobs      []github.Job
+	jobLog    string
 }
 
 func (f *fakeAPI) Tags(context.Context) ([]github.Tag, error) { return f.tags, nil }
@@ -30,6 +31,8 @@ func (f *fakeAPI) WorkflowRuns(context.Context, string, int) ([]github.Run, erro
 }
 func (f *fakeAPI) RecentRuns(context.Context, int) ([]github.Run, error) { return f.recent, nil }
 func (f *fakeAPI) Jobs(context.Context, int64) ([]github.Job, error)     { return f.jobs, nil }
+func (f *fakeAPI) JobLogs(context.Context, int64) (string, error)        { return f.jobLog, nil }
+func (f *fakeAPI) RunLogs(context.Context, int64) ([]byte, error)        { return nil, github.ErrNotFound }
 
 func liveConfig(env string) config.Config {
 	return config.Config{Environment: env, GitHubRepo: "o/r", GitHubWorkflow: "ci.yml", GitHubBranch: "main", PhobosURL: "https://p.example"}
