@@ -62,7 +62,7 @@ services:
     secrets:
       - postgres_password
     volumes:
-      - pg_data:/var/lib/postgresql/16/data
+      - pgdata:/var/lib/postgresql/16/data
     tmpfs:
       - /var/run/postgresql
       - /tmp
@@ -132,7 +132,7 @@ secrets:
         file: secrets/redis_acl
 
 volumes:
-  pg_data:
+  pgdata:
     driver: local
 
 networks:
