@@ -1,0 +1,314 @@
+# Chaîne CI/CD : build → scans (Trivy + Dockle) → publish GHCR + signature cosign keyless
+# → déploiement Azure Container Apps (par digest) → rapport à l'application.
+#
+#   pull_request → build + scans uniquement (rien n'est poussé)
+#   push main    → + publish (tags main, sha-xxxxxxx), signé
+#   push tag v*  → + publish (vX.Y.Z, latest) + deploy ACA + rapport POST /api/deployments
+#
+# Les noms de jobs comptent : l'app (DATA_SOURCE=live) range les jobs contenant
+# « publish » dans l'étape GHCR et ceux contenant « deploy » dans Container Apps.
+#
+# Sécurité : actions tierces épinglées par SHA, outils de scan lancés depuis leur
+# image officielle épinglée par digest, permissions minimales par job, pas de secret
+# longue durée (OIDC pour Azure et Sigstore, GITHUB_TOKEN éphémère pour GHCR).
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/lebaptoubaptiste/containermaxxing
+  ACA_APP: containers2v
+  ACA_RG: rg-caas
+  AZURE_URL: https://containers2v.voyager3.fr
+  TRIVY_IMAGE: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+  DOCKLE_IMAGE: goodwithtech/dockle:v0.4.15@sha256:eade932f793742de0aa8755406c7677cd7696f8675b6180926f7eeffa7abe6b9
+
+jobs:
+  # ---------------------------------------------------------------------------------
+  build:
+    name: Build & scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      image_id: ${{ steps.build.outputs.image_id }}
+      cve_critical: ${{ steps.trivy.outputs.critical }}
+      cve_high: ${{ steps.trivy.outputs.high }}
+      cve_medium: ${{ steps.trivy.outputs.medium }}
+      dockle_status: ${{ steps.dockle.outputs.status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Métadonnées de version
+        id: meta
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="sha-${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build de l'image (multi-stage, distroless)
+        id: build
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          CREATED: ${{ steps.meta.outputs.created }}
+        run: |
+          docker build --pull \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT="$GITHUB_SHA" \
+            --build-arg CREATED="$CREATED" \
+            -t containermaxxing:ci .
+          docker save containermaxxing:ci -o image.tar
+          echo "image_id=$(docker inspect --format '{{.Id}}' containermaxxing:ci)" >> "$GITHUB_OUTPUT"
+          docker image ls containermaxxing:ci
+
+      - name: Scan Trivy (vulnérabilités + secrets)
+        id: trivy
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work "$TRIVY_IMAGE" image \
+            --input image.tar --scanners vuln,secret \
+            --format json --output trivy.json --quiet
+          # Tableau lisible dans les logs
+          docker run --rm -v "$PWD:/work" -w /work "$TRIVY_IMAGE" convert \
+            --format table --scanners vuln,secret trivy.json
+          count() { jq "[.Results[]?.Vulnerabilities[]? | select(.Severity==\"$1\")] | length" trivy.json; }
+          fixable() { jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH") | select(.FixedVersion != null and .FixedVersion != "")] | length' trivy.json; }
+          secrets=$(jq '[.Results[]?.Secrets[]?] | length' trivy.json)
+          {
+            echo "critical=$(count CRITICAL)"
+            echo "high=$(count HIGH)"
+            echo "medium=$(count MEDIUM)"
+            echo "fixable=$(fixable)"
+            echo "secrets=$secrets"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Lint Dockle (CIS Docker Benchmark)
+        id: dockle
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work "$DOCKLE_IMAGE" \
+            --input image.tar --format json --output dockle.json --exit-code 0
+          docker run --rm -v "$PWD:/work" -w /work "$DOCKLE_IMAGE" --input image.tar --exit-code 0
+          fatal=$(jq '.summary.fatal' dockle.json)
+          warn=$(jq '.summary.warn' dockle.json)
+          if   [ "$fatal" -gt 0 ]; then status=fatal
+          elif [ "$warn"  -gt 0 ]; then status=warn
+          else status=pass; fi
+          echo "status=$status" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Politique de sécurité
+        env:
+          FIXABLE: ${{ steps.trivy.outputs.fixable }}
+          SECRETS: ${{ steps.trivy.outputs.secrets }}
+          DOCKLE: ${{ steps.dockle.outputs.status }}
+        run: |
+          fail=0
+          [ "$FIXABLE" -eq 0 ] || { echo "::error::Trivy : $FIXABLE CVE CRITICAL/HIGH corrigeable(s)"; fail=1; }
+          [ "$SECRETS" -eq 0 ] || { echo "::error::Trivy : $SECRETS secret(s) détecté(s) dans l'image"; fail=1; }
+          [ "$DOCKLE" != fatal ] || { echo "::error::Dockle : au moins un contrôle FATAL"; fail=1; }
+          exit $fail
+
+      - name: Rapports de scan
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scan-reports
+          path: |
+            trivy.json
+            dockle.json
+          if-no-files-found: ignore
+
+      - name: Conserver l'image pour la publication
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image
+          path: image.tar
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------------
+  # L'image publiée est exactement celle qui a été scannée (pas de rebuild).
+  publish:
+    name: Publish GHCR + cosign
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write   # push GHCR
+      id-token: write   # certificat Fulcio (cosign keyless)
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Récupérer l'image scannée
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image
+
+      - name: Push GHCR
+        id: push
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          docker load -i image.tar
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          tags=("$VERSION")
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then tags+=(latest); else tags+=(main); fi
+          for t in "${tags[@]}"; do
+            docker tag containermaxxing:ci "$IMAGE:$t"
+            docker push --quiet "$IMAGE:$t"
+          done
+          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$VERSION")
+          echo "digest=${ref#*@}" | tee -a "$GITHUB_OUTPUT"
+          docker logout ghcr.io
+
+      - name: Installer cosign
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+
+      - name: Signature keyless (OIDC GitHub → Fulcio → Rekor)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cosign sign --yes "$IMAGE@$DIGEST"
+
+      - name: Vérification de la signature
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-identity "https://github.com/$WORKFLOW_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            | jq '.[0].optional | {Issuer, Subject, githubWorkflowRef, githubWorkflowSha}'
+
+  # ---------------------------------------------------------------------------------
+  # ACA ne vérifie pas les signatures : on déploie le digest qui vient d'être signé
+  # et vérifié, jamais un tag mutable.
+  deploy:
+    name: Deploy Azure Container Apps
+    needs: [build, publish]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: prod
+      url: ${{ env.AZURE_URL }}
+    permissions:
+      contents: read
+      id-token: write   # login Azure OIDC (credential fédéré gh-env-prod-ids)
+    steps:
+      - name: Installer cosign
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+
+      - name: Revérifier la signature avant déploiement
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-identity "https://github.com/$WORKFLOW_REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          echo "signature OK pour $IMAGE@$DIGEST"
+
+      - name: Azure login (OIDC, sans secret)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Mise à jour de la Container App (par digest)
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
+          az containerapp update -n "$ACA_APP" -g "$ACA_RG" \
+            --image "$IMAGE@$DIGEST" \
+            --query "{revision:properties.latestRevisionName,image:properties.template.containers[0].image}" \
+            -o table
+
+      - name: Smoke test
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          for i in $(seq 1 30); do
+            got=$(curl -fsS --max-time 10 "$AZURE_URL/api/status" | jq -r '.app_version' 2>/dev/null || true)
+            if [ "$got" = "$VERSION" ]; then
+              curl -fsS --max-time 10 "$AZURE_URL/healthz"; echo
+              echo "$AZURE_URL sert $VERSION"; exit 0
+            fi
+            echo "tentative $i : version servie « ${got:-indisponible} », attendue $VERSION"
+            sleep 10
+          done
+          echo "::error::$AZURE_URL ne sert pas $VERSION après 5 min"
+          exit 1
+
+  # ---------------------------------------------------------------------------------
+  # Enregistre le déploiement (réussi ou non) dans l'historique de l'app.
+  report:
+    name: Rapport vers l'app
+    needs: [build, publish, deploy]
+    if: always() && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: prod
+    permissions:
+      actions: read   # date de début du run
+    steps:
+      - name: POST /api/deployments
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DIGEST: ${{ needs.publish.outputs.digest || needs.build.outputs.image_id }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          CVE_CRITICAL: ${{ needs.build.outputs.cve_critical || 0 }}
+          CVE_HIGH: ${{ needs.build.outputs.cve_high || 0 }}
+          CVE_MEDIUM: ${{ needs.build.outputs.cve_medium || 0 }}
+          DOCKLE: ${{ needs.build.outputs.dockle_status || 'skipped' }}
+          SIGNED: ${{ needs.publish.result == 'success' }}
+        run: |
+          if [ -z "$INGEST_TOKEN" ]; then
+            echo "::warning::INGEST_TOKEN absent de l'environnement prod : rapport ignoré"; exit 0
+          fi
+          if [ -z "$DIGEST" ]; then
+            echo "::warning::aucun digest (build en échec) : rapport ignoré"; exit 0
+          fi
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
+          duration=$(( $(date -u +%s) - $(date -u -d "$started" +%s) ))
+          status=failed; [ "$DEPLOY_RESULT" = success ] && status=success
+          body=$(jq -n \
+            --arg tag "$VERSION" --arg digest "$DIGEST" --arg status "$status" \
+            --argjson crit "$CVE_CRITICAL" --argjson high "$CVE_HIGH" --argjson med "$CVE_MEDIUM" \
+            --arg dockle "$DOCKLE" --argjson signed "$SIGNED" \
+            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg started "$started" --argjson dur "$duration" \
+            '{tag:$tag, digest:$digest, status:$status, cve_critical:$crit, cve_high:$high,
+              cve_medium:$med, dockle_status:$dockle, signed:$signed, target:"azure",
+              run_url:$run, started_at:$started, duration_s:$dur}')
+          echo "$body" | jq .
+          curl -fsS --max-time 30 --retry 3 --retry-all-errors -X POST "$AZURE_URL/api/deployments" \
+            -H "Authorization: Bearer $INGEST_TOKEN" -H "Content-Type: application/json" \
+            --data-binary "$body" | jq .
