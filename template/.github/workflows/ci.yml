@@ -43,4 +43,9 @@ jobs:
       # aca-app: mon-app
       # aca-resource-group: rg-mon-app
       # app-url: https://mon-app.example.com
-    secrets: inherit
+    # Seuls les secrets du dépôt utiles au build (pas « secrets: inherit », qui les
+    # transmettrait tous). Les secrets Azure sont lus par le job de déploiement dans
+    # l'environnement « prod » : ils ne sont pas à transmettre ici.
+    secrets:
+      DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+      DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
