@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM dhi.io/node:24-alpine3.22-dev@sha256:f7c3a76cffba75be1ec64f1f8bfa435a2f265a8c48da9b7cc65212e328230226 AS web
 WORKDIR /app
 COPY package.json package-lock.json ./
