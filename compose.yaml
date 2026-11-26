@@ -1,0 +1,141 @@
+name: containermaxxing
+
+services:
+  containermaxxing:
+    image: ${APP_IMAGE}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${APP_BIND}:${APP_PORT}:8080"
+    networks:
+      - edge
+      - backend
+    environment:
+      APP_ENV: ${APP_ENV}
+      DATA_SOURCE: ${DATA_SOURCE}
+      LOG_LEVEL: ${LOG_LEVEL}
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}
+      PHOBOS_URL: ${PHOBOS_URL}
+      AZURE_URL: ${AZURE_URL}
+      GHCR_IMAGE: ${GHCR_IMAGE}
+      CAAS_APP: ${CAAS_APP}
+      DATABASE_URL_FILE: /run/secrets/database_url
+      REDIS_URL_FILE: /run/secrets/redis_url
+      INGEST_TOKEN_FILE: /run/secrets/ingest_token
+      GITHUB_TOKEN_FILE: /run/secrets/github_token
+    secrets:
+      - database_url
+      - github_token
+      - redis_url
+      - ingest_token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    mem_reservation: 256m
+    pids_limit: 100
+    restart: always
+    healthcheck:
+      test: ["CMD", "/app/server", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+
+  postgres:
+    image: dhi.io/postgres:16-alpine3.22@sha256:206e4a72fda5b9edab43a7105034080e1399a5af1c0c54eac38d4490c24ac457
+    networks:
+      - backend
+    environment:
+      POSTGRES_USER: containermaxxing
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: containermaxxing
+      POSTGRES_INITDB_ARGS: "--auth-local=scram-sha-256 --auth-host=scram-sha-256"
+    secrets:
+      - postgres_password
+    volumes:
+      - pg_data:/var/lib/postgresql/16/data
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
+    user: "70:70"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    mem_reservation: 128m
+    pids_limit: 150
+    restart: always
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "containermaxxing", "-d", "containermaxxing", "-h", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+
+  redis:
+    image: dhi.io/redis:8@sha256:616c45858da8f165b8e910d2637fda78f80e24ec0f5866564b1d5821ecd00098
+    networks:
+      - backend
+    secrets:
+      - redis_acl
+    tmpfs:
+      - /tmp
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    mem_reservation: 128m
+    pids_limit: 64
+    restart: always
+    command: 
+      - redis-server
+      - --aclfile 
+      - /run/secrets/redis_acl
+      - --save 
+      - ""
+      - --appendonly 
+      - "no"
+      - --maxmemory 
+      - 64mb
+      - --maxmemory-policy 
+      - allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "--user", "healthcheck", "--pass", "healthcheck", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+secrets:
+      database_url:
+        file: secrets/database_url
+      github_token:
+        file: secrets/github_token
+      redis_url:
+        file: secrets/redis_url
+      ingest_token:
+        file: secrets/ingest_token
+      postgres_password:
+        file: secrets/postgres_password
+      redis_acl:
+        file: secrets/redis_acl
+
+volumes:
+  pg_data:
+    driver: local
+
+networks:
+  edge:
+  backend:
+    internal: true
