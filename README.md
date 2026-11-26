@@ -338,7 +338,7 @@ Le proxy host NPM de `containers2v-statique.voyager3.fr` vise `http://172.22.0.1
 | Service | Image | Utilisateur | Détails |
 |---------|-------|-------------|---------|
 | `app` | construite depuis le `Dockerfile` | `65532` | seul service qui publie un port ; réseaux `edge` et `backend` |
-| `postgres` | `dhi.io/postgres:16-alpine3.22` | `70` | volume nommé `pgdata` sur `/var/lib/postgresql/data` (survit à `down`, pas à `down -v`), `scram-sha-256`, mot de passe lu depuis le secret |
+| `postgres` | `dhi.io/postgres:16-alpine3.22` | `70` | volume nommé `pgdata` sur `/var/lib/postgresql/16/data`, le PGDATA de l'image (survit à `down`, pas à `down -v`), `scram-sha-256`, mot de passe lu depuis le secret |
 | `redis` | `dhi.io/redis:8` | `65532` | pur cache (pas de persistance, 64 Mo, éviction LRU), accès contrôlé par le fichier ACL |
 
 Les images sont figées par empreinte (`@sha256:…`) ; le serveur doit être connecté à `dhi.io` pour les télécharger.
