@@ -244,6 +244,9 @@ jobs:
           DIGEST: ${{ needs.publish.outputs.digest }}
         run: |
           az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
+          if [ "$(az containerapp ingress show -n "$ACA_APP" -g "$ACA_RG" --query targetPort -o tsv)" != 8080 ]; then
+            az containerapp ingress update -n "$ACA_APP" -g "$ACA_RG" --target-port 8080 -o none
+          fi
           az containerapp update -n "$ACA_APP" -g "$ACA_RG" \
             --image "$IMAGE@$DIGEST" \
             --query "{revision:properties.latestRevisionName,image:properties.template.containers[0].image}" \
