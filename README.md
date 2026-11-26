@@ -49,7 +49,7 @@ deploy/phobos.env    configuration de phobos (aucun secret)
 Dockerfile           image de prod (multi-stage, distroless)
 compose.yaml         pile de prod sur phobos (app + PostgreSQL + Redis)
 compose.dev.yaml     environnement de dev (jamais en prod)
-.github/workflows/   ci.yml (CI/CD), dependances.yml (PR empilées), azure-login-test.yml (test OIDC)
+.github/workflows/   ci.yml (CI/CD), dependances.yml (PR empilées)
 ```
 
 Le frontend est compilé par `tsc` (TypeScript 7), seule dépendance npm, et uniquement en dépendance de dev : le
