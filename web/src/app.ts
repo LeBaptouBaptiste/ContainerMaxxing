@@ -41,7 +41,31 @@ function renderBanner(s: Snapshot): void {
   env.textContent = s.environment;
   env.dataset.env = s.environment;
   $("#source-badge").hidden = s.source !== "mock";
+  renderEnvSwitch(s);
   document.title = `${s.prod.tag} · ContainerMaxxing`;
+}
+
+// Lien vers l'autre déploiement (phobos ↔ Azure), dans le même onglet.
+// Seules les URL https sont acceptées ; en local, pas de lien.
+function renderEnvSwitch(s: Snapshot): void {
+  const sw = $("#env-switch") as HTMLAnchorElement;
+  const target =
+    s.environment === "phobos" ? { label: "Voir sur Azure →", url: s.azure_url } :
+    s.environment === "azure" ? { label: "Voir sur phobos →", url: s.phobos_url } :
+    null;
+  let href = "";
+  try {
+    if (target?.url) {
+      const u = new URL(target.url);
+      if (u.protocol === "https:") href = u.href;
+    }
+  } catch { /* URL invalide : pas de lien */ }
+  sw.hidden = href === "";
+  if (href !== "" && target) {
+    sw.href = href;
+    sw.textContent = target.label;
+    sw.title = href;
+  }
 }
 
 function setLive(stateName: "open" | "error", text: string): void {

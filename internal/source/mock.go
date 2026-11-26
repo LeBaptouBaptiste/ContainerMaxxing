@@ -494,6 +494,8 @@ func (m *Mock) snapshot() model.Snapshot {
 		Environment: m.cfg.env,
 		Source:      "mock",
 		AppVersion:  m.version,
+		PhobosURL:   m.cfg.phobosURL,
+		AzureURL:    m.cfg.azureURL,
 		Prod:        m.prod,
 		Run:         run,
 		GeneratedAt: now,
