@@ -9,3 +9,9 @@ deploy/
 secrets/
 reports/
 web/static/js/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.sarif
+*.tar
