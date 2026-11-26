@@ -1,0 +1,32 @@
+# Contexte de build minimal : seul ce dont le Dockerfile a besoin est envoyé au build.
+# Exclut en priorité tout ce qui pourrait contenir un secret.
+
+# Secrets et configuration locale
+.env*
+secrets/
+*.pem
+*.key
+
+# Git, CI, déploiement
+.git*
+.github/
+.*ignore
+compose*
+app.env*
+scripts/
+
+# Éditeurs, OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Artefacts locaux (régénérés dans le build)
+node_modules/
+dist/
+reports/
+*.sarif
+*.tar
+
+# Documentation
+README.md
