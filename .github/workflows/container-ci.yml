@@ -1,0 +1,619 @@
+# CI/CD réutilisable pour une image de conteneur :
+#   build → Trivy → Dockle → SBOM → (publish GHCR + cosign keyless + attestation SBOM)
+#   → (déploiement Azure Container Apps par digest) → (rapport) → (release GitHub)
+#
+# Appel depuis un autre dépôt (voir template/README.md) :
+#
+#   jobs:
+#     ci:
+#       uses: LeBaptouBaptiste/ContainerMaxxing/.github/workflows/container-ci.yml@main
+#       with:
+#         image: ghcr.io/mon-org/mon-app
+#       secrets:
+#         DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+#         DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+#
+# Ce que fait chaque déclencheur de l'appelant :
+#   pull_request → build + scans + SBOM + audit de la CI ; rien n'est publié
+#   push branche → + publish GHCR (tags <branche>, sha-xxxxxxx), signé, SBOM attesté, graphe de dépendances
+#   push tag v*  → + deploy Container Apps (si aca-app) + rapport (si report-url) + release GitHub
+#
+# Permissions à accorder au job appelant (un workflow appelé ne peut pas en avoir plus) :
+#   contents: write, packages: write, id-token: write, security-events: write, actions: read
+#
+# Secrets (tous facultatifs selon les options) :
+#   - DHI_USERNAME, DHI_TOKEN : secrets du dépôt, à transmettre explicitement (pas de
+#     « secrets: inherit », qui transmettrait tous les secrets du dépôt) ;
+#   - AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, INGEST_TOKEN : secrets de
+#     l'environnement de déploiement, lus directement par les jobs qui le déclarent.
+#
+# Les noms de jobs comptent pour ContainerMaxxing : ceux contenant « publish » vont dans
+# l'étape GHCR, ceux contenant « deploy » dans Container Apps.
+name: Container CI
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: Image GHCR sans tag, en minuscules (ex. ghcr.io/mon-org/mon-app)
+        required: true
+        type: string
+      context:
+        description: Contexte de build
+        type: string
+        default: .
+      dockerfile:
+        description: Chemin du Dockerfile
+        type: string
+        default: Dockerfile
+      dhi-login:
+        description: Se connecter à dhi.io avant le build (secrets DHI_USERNAME / DHI_TOKEN)
+        type: boolean
+        default: false
+      audit-ci:
+        description: Auditer la CI elle-même avec plumber (SARIF dans Code scanning)
+        type: boolean
+        default: true
+      dependency-graph:
+        description: Envoyer le SBOM au graphe de dépendances GitHub (alertes Dependabot)
+        type: boolean
+        default: true
+      release:
+        description: Créer une release GitHub (SBOM et rapports joints) après un déploiement réussi par tag
+        type: boolean
+        default: true
+      environment:
+        description: Environnement GitHub du déploiement (porte les secrets Azure et INGEST_TOKEN)
+        type: string
+        default: prod
+      aca-app:
+        description: Nom de la Container App à mettre à jour sur un tag (vide = pas de déploiement)
+        type: string
+        default: ''
+      aca-resource-group:
+        description: Groupe de ressources de la Container App
+        type: string
+        default: ''
+      target-port:
+        description: Port d'écoute du conteneur (ingress de la Container App)
+        type: number
+        default: 8080
+      app-url:
+        description: URL publique de l'app déployée (smoke test et lien de l'environnement)
+        type: string
+        default: ''
+      smoke-path:
+        description: Chemin qui doit répondre 2xx après le déploiement
+        type: string
+        default: /healthz
+      version-path:
+        description: Chemin JSON qui expose la version servie (vide = pas de contrôle de version)
+        type: string
+        default: ''
+      version-jq:
+        description: Expression jq qui extrait la version de version-path
+        type: string
+        default: .version
+      report-url:
+        description: Endpoint qui reçoit le rapport de déploiement au format ContainerMaxxing (vide = pas de rapport)
+        type: string
+        default: ''
+    outputs:
+      version:
+        description: Version construite (tag vX.Y.Z ou sha-xxxxxxx)
+        value: ${{ jobs.build.outputs.version }}
+      digest:
+        description: Digest de l'image publiée (vide sur une PR)
+        value: ${{ jobs.publish.outputs.digest }}
+    secrets:
+      DHI_USERNAME:
+        required: false
+      DHI_TOKEN:
+        required: false
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        required: false
+      INGEST_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  IMAGE: ${{ inputs.image }}
+  TRIVY_IMAGE: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+  DOCKLE_IMAGE: goodwithtech/dockle:v0.4.15@sha256:eade932f793742de0aa8755406c7677cd7696f8675b6180926f7eeffa7abe6b9
+
+jobs:
+  # ---------------------------------------------------------------------------------
+  build:
+    name: Build & scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      image_id: ${{ steps.build.outputs.image_id }}
+      cve_critical: ${{ steps.trivy.outputs.critical }}
+      cve_high: ${{ steps.trivy.outputs.high }}
+      cve_medium: ${{ steps.trivy.outputs.medium }}
+      dockle_status: ${{ steps.dockle.outputs.status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Métadonnées de version
+        id: meta
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="sha-${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build de l'image
+        id: build
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          CREATED: ${{ steps.meta.outputs.created }}
+          CONTEXT: ${{ inputs.context }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          DHI_LOGIN: ${{ inputs.dhi-login }}
+          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+        run: |
+          if [ "$DHI_LOGIN" = true ]; then
+            # Images de build durcies (DHI) : connexion limitée à cette étape, retirée ensuite
+            if [ -z "$DHI_USERNAME" ] || [ -z "$DHI_TOKEN" ]; then
+              echo "::error::dhi-login demandé mais DHI_USERNAME / DHI_TOKEN absents des secrets du dépôt"; exit 1
+            fi
+            echo "$DHI_TOKEN" | docker login dhi.io -u "$DHI_USERNAME" --password-stdin
+            trap 'docker logout dhi.io' EXIT
+          fi
+          docker build --pull \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT="$GITHUB_SHA" \
+            --build-arg CREATED="$CREATED" \
+            -f "$DOCKERFILE" -t image:ci "$CONTEXT"
+          docker save image:ci -o image.tar
+          echo "image_id=$(docker inspect --format '{{.Id}}' image:ci)" >> "$GITHUB_OUTPUT"
+          docker image ls image:ci
+
+      - name: Scan Trivy (vulnérabilités + secrets)
+        id: trivy
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work "$TRIVY_IMAGE" image \
+            --input image.tar --scanners vuln,secret \
+            --format json --output trivy.json --quiet
+          # Tableau lisible dans les logs
+          docker run --rm -v "$PWD:/work" -w /work "$TRIVY_IMAGE" convert \
+            --format table --scanners vuln,secret trivy.json
+          count() { jq "[.Results[]?.Vulnerabilities[]? | select(.Severity==\"$1\")] | length" trivy.json; }
+          fixable() { jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH") | select(.FixedVersion != null and .FixedVersion != "")] | length' trivy.json; }
+          secrets=$(jq '[.Results[]?.Secrets[]?] | length' trivy.json)
+          {
+            echo "critical=$(count CRITICAL)"
+            echo "high=$(count HIGH)"
+            echo "medium=$(count MEDIUM)"
+            echo "fixable=$(fixable)"
+            echo "secrets=$secrets"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Lint Dockle (CIS Docker Benchmark)
+        id: dockle
+        env:
+          CONTEXT: ${{ inputs.context }}
+        run: |
+          # Exceptions versionnées et justifiées dans <contexte>/.dockleignore
+          ignore=()
+          if [ -f "$CONTEXT/.dockleignore" ]; then ignore=(-v "$PWD/$CONTEXT/.dockleignore:/work/.dockleignore:ro"); fi
+          docker run --rm -v "$PWD:/work" "${ignore[@]}" -w /work "$DOCKLE_IMAGE" \
+            --input image.tar --format json --output dockle.json --exit-code 0
+          docker run --rm -v "$PWD:/work" "${ignore[@]}" -w /work "$DOCKLE_IMAGE" --input image.tar --exit-code 0
+          fatal=$(jq '.summary.fatal' dockle.json)
+          warn=$(jq '.summary.warn' dockle.json)
+          if   [ "$fatal" -gt 0 ]; then status=fatal
+          elif [ "$warn"  -gt 0 ]; then status=warn
+          else status=pass; fi
+          echo "status=$status" | tee -a "$GITHUB_OUTPUT"
+
+      # SBOM CycloneDX (attesté sur l'image et joint à la release) et snapshot au
+      # format de l'API dependency submission (graphe de dépendances GitHub).
+      - name: SBOM CycloneDX + snapshot de dépendances
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work "$TRIVY_IMAGE" image \
+            --input image.tar --format cyclonedx --output sbom.raw.json --quiet
+          # Trivy nomme le composant d'après l'archive : on remet le nom de l'image.
+          jq --arg name "$IMAGE" --arg version "$VERSION" \
+            '.metadata.component.name = $name | .metadata.component.version = $version' \
+            sbom.raw.json > sbom.cdx.json
+          docker run --rm -v "$PWD:/work" -w /work \
+            -e GITHUB_REF -e GITHUB_SHA -e GITHUB_JOB -e GITHUB_RUN_ID -e GITHUB_WORKFLOW \
+            "$TRIVY_IMAGE" image --input image.tar --format github --output dependency-snapshot.json --quiet
+          jq -r '"SBOM CycloneDX \(.specVersion) : \(.components | length) composants"' sbom.cdx.json
+          jq -r '.components | group_by(.type)[] | "  \(.[0].type) : \(length)"' sbom.cdx.json
+          jq -r '.manifests | to_entries[] | "snapshot : \(.key) → \(.value.resolved | length) paquets"' dependency-snapshot.json
+
+      - name: Politique de sécurité
+        env:
+          FIXABLE: ${{ steps.trivy.outputs.fixable }}
+          SECRETS: ${{ steps.trivy.outputs.secrets }}
+          DOCKLE: ${{ steps.dockle.outputs.status }}
+        run: |
+          fail=0
+          [ "$FIXABLE" -eq 0 ] || { echo "::error::Trivy : $FIXABLE CVE CRITICAL/HIGH corrigeable(s)"; fail=1; }
+          [ "$SECRETS" -eq 0 ] || { echo "::error::Trivy : $SECRETS secret(s) détecté(s) dans l'image"; fail=1; }
+          [ "$DOCKLE" != fatal ] || { echo "::error::Dockle : au moins un contrôle FATAL"; fail=1; }
+          exit $fail
+
+      - name: Rapports de scan
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scan-reports
+          path: |
+            trivy.json
+            dockle.json
+          if-no-files-found: ignore
+
+      - name: Conserver le SBOM
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: |
+            sbom.cdx.json
+            dependency-snapshot.json
+
+      - name: Conserver l'image pour la publication
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image
+          path: image.tar
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------------
+  # Audit de la CI elle-même (plumber) : actions épinglées, permissions, déclencheurs
+  # dangereux, actions archivées ou vulnérables, protection de branche… Tourne en
+  # parallèle du build ; résultats dans Security → Code scanning (SARIF).
+  # L'action vérifie le binaire (checksums.txt + attestation SLSA) avant de le lancer.
+  audit-ci:
+    name: Audit CI (plumber)
+    if: inputs.audit-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read            # états des workflows et journal d'un run (portée du jeton)
+      security-events: write   # envoi du SARIF dans Code scanning
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Plumber
+        uses: getplumber/plumber@ec8cb3a7edd6a324b33e85109b627b2df6023d94 # v0.7.23
+        with:
+          version: v0.7.23
+          soft-fail: true       # rapport seul pour l'instant ; à retirer une fois le score à 100
+          score-push: false     # pas de publication du score sur score.getplumber.io
+
+  # ---------------------------------------------------------------------------------
+  # L'image publiée est exactement celle qui a été scannée (pas de rebuild).
+  publish:
+    name: Publish GHCR + cosign
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write   # push GHCR
+      id-token: write   # certificat Fulcio (cosign keyless)
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      identity: ${{ steps.identity.outputs.identity }}
+    steps:
+      - name: Récupérer l'image scannée
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image
+
+      - name: Push GHCR
+        id: push
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          docker load -i image.tar
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          tags=("$VERSION")
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then tags+=(latest); else tags+=("${GITHUB_REF_NAME//\//-}"); fi
+          for t in "${tags[@]}"; do
+            docker tag image:ci "$IMAGE:$t"
+            docker push --quiet "$IMAGE:$t"
+          done
+          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$VERSION")
+          echo "digest=${ref#*@}" | tee -a "$GITHUB_OUTPUT"
+          docker logout ghcr.io
+
+      # Dans un workflow réutilisable, le certificat de signature porte l'identité de CE
+      # workflow (job_workflow_ref), pas celle de l'appelant : on la lit dans le jeton
+      # OIDC pour vérifier ensuite la signature contre l'identité exacte.
+      - name: Identité de signature
+        id: identity
+        run: |
+          token=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore" | jq -r .value)
+          payload=$(cut -d. -f2 <<<"$token" | tr '_-' '/+')
+          while (( ${#payload} % 4 )); do payload+="="; done
+          ref=$(base64 -d <<<"$payload" | jq -r .job_workflow_ref)
+          echo "identity=https://github.com/$ref" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Installer cosign
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+
+      - name: Signature keyless (OIDC GitHub → Fulcio → Rekor)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cosign sign --yes "$IMAGE@$DIGEST"
+
+      - name: Vérification de la signature
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+        run: |
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" \
+            | jq '.[0].optional | {Issuer, Subject, githubWorkflowRepository, githubWorkflowRef, githubWorkflowSha}'
+
+      - name: Récupérer le SBOM
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sbom
+
+      # Le SBOM devient une attestation in-toto signée keyless, liée au digest :
+      # on peut prouver qu'il décrit cette image et qu'il vient de cette CI.
+      - name: Attestation SBOM (cosign attest)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+        run: |
+          cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "$IMAGE@$DIGEST"
+          # Le code de retour de verify-attestation fait foi ; le résumé est indicatif.
+          cosign verify-attestation --type cyclonedx "$IMAGE@$DIGEST" \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" > attestation.json
+          jq -rs '.[0].payload | @base64d | fromjson
+                  | "attestation vérifiée : \(.predicateType), \(.predicate.components | length) composants"' \
+            attestation.json 2>/dev/null || echo "attestation vérifiée"
+
+  # ---------------------------------------------------------------------------------
+  # Graphe de dépendances GitHub (Insights → Dependency graph) : GitHub surveille
+  # ensuite ces paquets et lève des alertes Dependabot si une CVE est publiée après
+  # la release. Job séparé : seul lui a besoin de contents: write.
+  dependency-graph:
+    name: Graphe de dépendances
+    needs: [build, publish]
+    if: github.event_name != 'pull_request' && inputs.dependency-graph
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write   # POST /dependency-graph/snapshots
+    steps:
+      - name: Récupérer le snapshot
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sbom
+
+      - name: Envoyer le snapshot à GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X POST "repos/$GITHUB_REPOSITORY/dependency-graph/snapshots" \
+            --input dependency-snapshot.json | jq '{id, result, message}'
+
+  # ---------------------------------------------------------------------------------
+  # ACA ne vérifie pas les signatures : on déploie le digest qui vient d'être signé
+  # et vérifié, jamais un tag mutable.
+  deploy:
+    name: Deploy Azure Container Apps
+    needs: [build, publish]
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.aca-app != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.app-url }}
+    permissions:
+      contents: read
+      id-token: write   # login Azure OIDC (credential fédéré lié à l'environnement)
+    steps:
+      - name: Installer cosign
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+
+      - name: Revérifier la signature avant déploiement
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          IDENTITY: ${{ needs.publish.outputs.identity }}
+        run: |
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" > /dev/null
+          echo "signature OK pour $IMAGE@$DIGEST"
+
+      - name: Azure login (OIDC, sans secret)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Mise à jour de la Container App (par digest)
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          ACA_APP: ${{ inputs.aca-app }}
+          ACA_RG: ${{ inputs.aca-resource-group }}
+          PORT: ${{ inputs.target-port }}
+        run: |
+          az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
+          if [ "$(az containerapp ingress show -n "$ACA_APP" -g "$ACA_RG" --query targetPort -o tsv)" != "$PORT" ]; then
+            az containerapp ingress update -n "$ACA_APP" -g "$ACA_RG" --target-port "$PORT" -o none
+          fi
+          az containerapp update -n "$ACA_APP" -g "$ACA_RG" \
+            --image "$IMAGE@$DIGEST" \
+            --query "{revision:properties.latestRevisionName,image:properties.template.containers[0].image}" \
+            -o table
+
+      - name: Smoke test
+        if: inputs.app-url != ''
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          APP_URL: ${{ inputs.app-url }}
+          SMOKE_PATH: ${{ inputs.smoke-path }}
+          VERSION_PATH: ${{ inputs.version-path }}
+          VERSION_JQ: ${{ inputs.version-jq }}
+        run: |
+          base=${APP_URL%/}
+          for i in $(seq 1 30); do
+            if [ -n "$VERSION_PATH" ]; then
+              got=$(curl -fsS --max-time 10 "$base$VERSION_PATH" | jq -r "$VERSION_JQ" 2>/dev/null || true)
+              ok=false; [ "$got" = "$VERSION" ] && ok=true
+              state="version servie « ${got:-indisponible} », attendue $VERSION"
+            else
+              ok=false; curl -fsS --max-time 10 -o /dev/null "$base$SMOKE_PATH" && ok=true
+              state="$SMOKE_PATH ne répond pas encore"
+            fi
+            if [ "$ok" = true ] && curl -fsS --max-time 10 -o /dev/null "$base$SMOKE_PATH"; then
+              echo "$base sert $VERSION ($SMOKE_PATH OK)"; exit 0
+            fi
+            echo "tentative $i : $state"
+            sleep 10
+          done
+          echo "::error::$base ne sert pas $VERSION après 5 min"
+          exit 1
+
+  # ---------------------------------------------------------------------------------
+  # Enregistre le déploiement (réussi ou non) dans une app ContainerMaxxing.
+  report:
+    name: Rapport de déploiement
+    needs: [build, publish, deploy]
+    if: always() && startsWith(github.ref, 'refs/tags/v') && inputs.report-url != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: ${{ inputs.environment }}
+    permissions:
+      actions: read   # date de début du run
+    steps:
+      - name: POST du rapport
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_URL: ${{ inputs.report-url }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DIGEST: ${{ needs.publish.outputs.digest || needs.build.outputs.image_id }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          CVE_CRITICAL: ${{ needs.build.outputs.cve_critical || 0 }}
+          CVE_HIGH: ${{ needs.build.outputs.cve_high || 0 }}
+          CVE_MEDIUM: ${{ needs.build.outputs.cve_medium || 0 }}
+          DOCKLE: ${{ needs.build.outputs.dockle_status || 'skipped' }}
+          SIGNED: ${{ needs.publish.result == 'success' }}
+        run: |
+          if [ -z "$INGEST_TOKEN" ]; then
+            echo "::warning::INGEST_TOKEN absent de l'environnement : rapport ignoré"; exit 0
+          fi
+          if [ -z "$DIGEST" ]; then
+            echo "::warning::aucun digest (build en échec) : rapport ignoré"; exit 0
+          fi
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
+          duration=$(( $(date -u +%s) - $(date -u -d "$started" +%s) ))
+          status=failed; [ "$DEPLOY_RESULT" = success ] && status=success
+          body=$(jq -n \
+            --arg tag "$VERSION" --arg digest "$DIGEST" --arg status "$status" \
+            --argjson crit "$CVE_CRITICAL" --argjson high "$CVE_HIGH" --argjson med "$CVE_MEDIUM" \
+            --arg dockle "$DOCKLE" --argjson signed "$SIGNED" \
+            --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg started "$started" --argjson dur "$duration" \
+            '{tag:$tag, digest:$digest, status:$status, cve_critical:$crit, cve_high:$high,
+              cve_medium:$med, dockle_status:$dockle, signed:$signed, target:"azure",
+              run_url:$run, started_at:$started, duration_s:$dur}')
+          echo "$body" | jq .
+          curl -fsS --max-time 30 --retry 3 --retry-all-errors -X POST "$REPORT_URL" \
+            -H "Authorization: Bearer $INGEST_TOKEN" -H "Content-Type: application/json" \
+            --data-binary "$body" | jq .
+
+  # ---------------------------------------------------------------------------------
+  # Release GitHub du tag déployé : notes générées, SBOM et rapports de scan joints,
+  # digest et commandes de vérification dans la description.
+  release:
+    name: Release GitHub
+    needs: [build, publish, deploy]
+    if: >-
+      always() && startsWith(github.ref, 'refs/tags/v') && inputs.release
+      && needs.publish.result == 'success'
+      && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write   # création de la release
+    steps:
+      - name: Récupérer SBOM et rapports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: '{sbom,scan-reports}'
+          merge-multiple: true
+
+      - name: Créer la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          IDENTITY: ${{ needs.publish.outputs.identity }}
+          APP_URL: ${{ inputs.app-url }}
+        run: |
+          where=""; [ -n "$APP_URL" ] && where="Déployée sur $APP_URL · "
+          cat > notes.md <<EOF
+          **Image** : \`$IMAGE@$DIGEST\`
+          ${where}signée keyless (cosign) · SBOM CycloneDX attesté.
+
+          \`\`\`sh
+          cosign verify $IMAGE@$DIGEST \\
+            --certificate-identity "$IDENTITY" \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          cosign verify-attestation --type cyclonedx $IMAGE@$DIGEST \\
+            --certificate-identity "$IDENTITY" \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          \`\`\`
+          EOF
+          files=(sbom.cdx.json trivy.json dockle.json)
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$VERSION" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$VERSION" "${files[@]}" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --title "$VERSION" --notes-file notes.md --generate-notes
+          fi
+          gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json url,assets \
+            --jq '"\(.url)\n" + ([.assets[].name] | join(", "))'
