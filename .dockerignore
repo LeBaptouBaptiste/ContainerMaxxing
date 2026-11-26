@@ -1,34 +1,19 @@
-# Contexte de build minimal : seul ce dont le Dockerfile a besoin est envoyé.
-# Exclut en priorité tout ce qui pourrait contenir un secret.
-
-# Secrets et configuration locale
-.env
-.env.*
+node_modules/
+.env*
+.git*
+.*ignore
+compose*
+README.md
+.github/
+deploy/
 secrets/
 *.pem
 *.key
-
-# Git, éditeurs, OS
-.git
-.github
-.gitignore
-.gitattributes
-.idea
-.vscode
+reports/
+web/static/js/
+.idea/
+.vscode/
 .DS_Store
 Thumbs.db
-
-# Artefacts locaux (régénérés dans le build)
-node_modules
-web/static/js
-reports
 *.sarif
 *.tar
-
-# Inutile à l'image
-compose*.yaml
-compose*.yml
-deploy
-scripts
-*.md
-**/*_test.go
