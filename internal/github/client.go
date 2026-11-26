@@ -315,4 +315,29 @@ func (c *Client) Jobs(ctx context.Context, runID int64) ([]Job, error) {
 	return page.Jobs, err
 }
 
+// JobLogs renvoie le journal texte d'un job. GitHub ne le publie qu'à la fin du
+// job (404 avant). Pas de cache ici : l'appelant garde seulement l'extrait utile,
+// et ni l'ETag ni le 404 ne sont mémorisés (le journal apparaît peu après la fin).
+func (c *Client) JobLogs(ctx context.Context, jobID int64) (string, error) {
+	path := fmt.Sprintf("/repos/%s/actions/jobs/%d/logs", c.repo, jobID)
+	b, err := c.fetch(ctx, path)
+	c.mu.Lock()
+	delete(c.etags, path)
+	delete(c.missing, path)
+	c.mu.Unlock()
+	return string(b), err
+}
+
+// RunLogs renvoie l'archive zip des journaux d'un run terminé (un fichier par
+// step). Même politique que JobLogs : rien n'est mémorisé ici.
+func (c *Client) RunLogs(ctx context.Context, runID int64) ([]byte, error) {
+	path := fmt.Sprintf("/repos/%s/actions/runs/%d/logs", c.repo, runID)
+	b, err := c.fetch(ctx, path)
+	c.mu.Lock()
+	delete(c.etags, path)
+	delete(c.missing, path)
+	c.mu.Unlock()
+	return b, err
+}
+
 func clamp(n int) int { return min(max(n, 1), 100) }
