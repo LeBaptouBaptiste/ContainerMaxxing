@@ -45,6 +45,7 @@ web/src/             frontend en TypeScript strict, sans framework ni bundler
 web/static/          index.html + app.css ; js/ = sortie de tsc (non commitée)
                      le tout embarqué dans le binaire (go:embed)
 scripts/             scan.sh (Trivy + Dockle), init-secrets.sh, boucles de rechargement à chaud du dev
+template/            kit réutilisable : Dockerfile, compose, scripts et CI pour d'autres projets
 deploy/phobos.env    configuration de phobos (aucun secret)
 Dockerfile           image de prod (multi-stage, distroless)
 compose.yaml         pile de prod sur phobos (app + PostgreSQL + Redis)
@@ -351,13 +352,14 @@ configuré sur phobos pour l'utilisateur dédié `cmaxxing`.
 
 ## CI/CD et déploiement Azure
 
-Le workflow `.github/workflows/ci.yml` enchaîne les contrôles ; chaque déclencheur va plus ou moins loin :
+Le workflow `.github/workflows/ci.yml` appelle la CI réutilisable `container-ci.yml` avec les paramètres du projet
+(image, Container App, URL, rapport) ; chaque déclencheur va plus ou moins loin :
 
 | Déclencheur | Jobs |
 |-------------|------|
 | Pull request vers `main` | **Build & scan** (build, Trivy, Dockle, SBOM, politique de sécurité) + **Audit CI** (plumber). Rien n'est publié. |
 | Push sur `main` | + **Publish GHCR + cosign** (tags `main` et `sha-xxxxxxx`, signature et attestation SBOM) + **Graphe de dépendances** GitHub |
-| Tag `vX.Y.Z` | + **Deploy Azure Container Apps** (par digest, après revérification de la signature, puis smoke test) + **Rapport vers l'app** + **Release GitHub** (SBOM et rapports de scan joints) |
+| Tag `vX.Y.Z` | + **Deploy Azure Container Apps** (par digest, après revérification de la signature, puis smoke test) + **Rapport de déploiement** (vers `/api/deployments`) + **Release GitHub** (SBOM et rapports de scan joints) |
 
 La release se fait donc en posant un tag sur `main` :
 
@@ -373,6 +375,14 @@ Côté Azure :
 - **Connexion de la CI** : OIDC (credential fédéré lié à l'environnement GitHub `prod`), sans secret longue durée.
 - **Secrets GitHub** : `DHI_USERNAME` / `DHI_TOKEN` au niveau du dépôt (build) ; `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
   `AZURE_SUBSCRIPTION_ID` et `INGEST_TOKEN` dans l'environnement `prod` (déploiement et rapport uniquement).
+
+## Réutiliser le système dans un autre projet
+
+Le dossier [`template/`](template/README.md) rend réutilisables les conteneurs et la CI du projet : Dockerfile durcis
+(Go et Node), compose durci (app + PostgreSQL + Redis), scripts de scan et de secrets, et un exemple de `ci.yml` qui
+appelle la **CI réutilisable** `.github/workflows/container-ci.yml`. Notre propre `ci.yml` appelle ce même workflow :
+le template est donc testé à chaque PR du projet. Mise en place pas à pas et choix de sécurité :
+[`template/README.md`](template/README.md).
 
 ## Workflow Git
 
