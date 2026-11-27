@@ -27,6 +27,20 @@ passe de l'un à l'autre.
 
 ## Architecture
 
+![Architecture locale (phobos) et cloud (Azure) de ContainerMaxxing](docs/architecture/architecture.png)
+
+Schéma des deux déploiements et de la chaîne qui les relie : la CI GitHub Actions publie une image signée sur
+GHCR et la déploie par digest sur Azure Container Apps via OIDC ; phobos sert une copie statique en
+podman-compose rootless derrière Nginx Proxy Manager, qui tourne sur la même machine. Version zoomable :
+[`docs/architecture/architecture.html`](docs/architecture/architecture.html) (à ouvrir dans un navigateur).
+Le schéma est généré par `docs/architecture/gen_schema.py` :
+
+```bash
+cd docs/architecture && python3 gen_schema.py schema_tpl.html architecture.html
+```
+
+Organisation du code :
+
 ```
 cmd/server/          point d'entrée (serveur + sous-commande `healthcheck`)
 internal/config/     configuration 100 % variables d'environnement
@@ -539,3 +553,13 @@ curl -X POST http://localhost:8080/api/deployments \
 | **Graphe de dépendances et alertes** | Le SBOM est envoyé au graphe de dépendances de GitHub : une CVE publiée après la release déclenche une alerte Dependabot. |
 | **Audit de la CI (plumber)** | Chaque PR vérifie la CI elle-même (actions épinglées, permissions, déclencheurs dangereux) ; résultats dans *Security → Code scanning*. Rapport non bloquant pour l'instant, le temps d'atteindre le score maximal. |
 | **Fusion contrôlée** | `main` n'accepte que des PR approuvées par l'autre membre, à jour, avec les statuts requis au vert. |
+
+## Usage de l'IA
+
+Déclaration demandée par la charte du cours. L'IA a servi d'assistant ; les choix, la relecture et la validation
+sont restés les nôtres.
+
+| | |
+|---|---|
+| **Outils** | Benjamin (infra) : Claude Code (Anthropic), . Baptiste (application) : Claude Code|
+| **Tâches assistées** | relecture de la CI (`ci.yml`, `container-ci.yml`) ; correction commandes Azure CLI (identité managée et OIDC, Container Apps, domaine et certificat, PostgreSQL) ; deux évolutions ciblées de l'app sur demande (journaux CI dans le panneau « Journal », lien phobos ↔ Azure) ; documentation et schéma d'architecture. |
