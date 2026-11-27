@@ -41,7 +41,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # À ADAPTER : même utilisateur que l'image (65532 pour Dockerfile.go, 1000 pour Dockerfile.node).
+    # À ADAPTER : même utilisateur que l'image (65532 pour go.Dockerfile, 1000 pour node.Dockerfile).
     user: "65532:65532"
     read_only: true
     cap_drop: [ALL]
@@ -53,7 +53,7 @@ services:
     restart: always
     # Redéfini ici : podman ignore le HEALTHCHECK de l'image.
     healthcheck:
-      # À ADAPTER : Dockerfile.go → binaire ; Dockerfile.node → commande ci-dessous.
+      # À ADAPTER : go.Dockerfile → binaire ; node.Dockerfile → commande ci-dessous.
       test: ["CMD", "/app/app", "healthcheck"]
       # test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 10s
