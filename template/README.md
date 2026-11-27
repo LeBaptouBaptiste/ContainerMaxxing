@@ -88,6 +88,11 @@ Dans *Settings → Secrets and variables → Actions* du dépôt :
 
 Les secrets d'environnement ne sont lus que par les jobs de déploiement : une PR n'y a pas accès.
 
+**Chaque secret utilisé doit être transmis par son nom dans `ci.yml`** (bloc `secrets:` de l'appel), y compris
+ceux qui n'existent que dans l'environnement `prod` : un secret non transmis est vide dans la CI réutilisable, et
+GitHub n'affiche aucune erreur (la connexion à Azure échoue alors avec « Ensure 'client-id' and 'tenant-id' are
+supplied »). Décommenter les lignes Azure de l'exemple si le déploiement est activé.
+
 Ensuite :
 
 - **Pull request** : build, Trivy, Dockle, SBOM et audit de la CI. Rien n'est publié.
