@@ -386,8 +386,12 @@ jobs:
             --certificate-identity "$IDENTITY" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
-            --certificate-github-workflow-ref "$GITHUB_REF" \
-            | jq '.[0].optional | {Issuer, Subject, githubWorkflowRepository, githubWorkflowRef, githubWorkflowSha}'
+            --certificate-github-workflow-ref "$GITHUB_REF" > /dev/null
+          # cosign v3 ne détaille plus le certificat dans sa sortie : on résume ce qui a été exigé.
+          echo "signature vérifiée : $IMAGE@$DIGEST"
+          echo "  signataire : $IDENTITY"
+          echo "  dépôt      : $GITHUB_REPOSITORY"
+          echo "  ref        : $GITHUB_REF"
 
       - name: Récupérer le SBOM
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
