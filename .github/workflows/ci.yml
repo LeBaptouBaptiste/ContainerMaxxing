@@ -46,9 +46,15 @@ jobs:
       version-path: /api/status
       version-jq: .app_version
       report-url: https://containers2v.voyager3.fr/api/deployments
-    # Seuls les secrets du dépôt utiles au build (pas « secrets: inherit », qui les
-    # transmettrait tous). Les secrets Azure et INGEST_TOKEN sont lus par les jobs de
-    # déploiement et de rapport dans l'environnement « prod » : jamais transmis ici.
+    # Uniquement les secrets utiles, par leur nom (pas « secrets: inherit », qui les
+    # transmettrait tous). Les secrets Azure et INGEST_TOKEN n'existent que dans
+    # l'environnement « prod » : il faut quand même les transmettre ici, sinon ils sont
+    # vides dans le workflow appelé. Seuls les jobs qui déclarent « prod » (déploiement,
+    # rapport) en reçoivent la valeur.
     secrets:
       DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
       DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}

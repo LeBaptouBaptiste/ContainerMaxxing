@@ -21,11 +21,14 @@
 # Permissions à accorder au job appelant (un workflow appelé ne peut pas en avoir plus) :
 #   contents: write, packages: write, id-token: write, security-events: write, actions: read
 #
-# Secrets (tous facultatifs selon les options) :
-#   - DHI_USERNAME, DHI_TOKEN : secrets du dépôt, à transmettre explicitement (pas de
-#     « secrets: inherit », qui transmettrait tous les secrets du dépôt) ;
+# Secrets (tous facultatifs selon les options), à transmettre un par un par leur nom
+# (pas de « secrets: inherit », qui transmettrait tous les secrets du dépôt) :
+#   - DHI_USERNAME, DHI_TOKEN : secrets du dépôt ;
 #   - AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, INGEST_TOKEN : secrets de
-#     l'environnement de déploiement, lus directement par les jobs qui le déclarent.
+#     l'environnement de déploiement. Ils doivent AUSSI être transmis par l'appelant
+#     (« AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }} »), même s'ils n'existent que dans
+#     l'environnement : sinon ils sont vides ici, sans erreur. Seuls les jobs qui déclarent
+#     cet environnement en reçoivent la valeur.
 #
 # Les noms de jobs comptent pour ContainerMaxxing : ceux contenant « publish » vont dans
 # l'étape GHCR, ceux contenant « deploy » dans Container Apps.
@@ -464,6 +467,21 @@ jobs:
             --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
             --certificate-github-workflow-ref "$GITHUB_REF" > /dev/null
           echo "signature OK pour $IMAGE@$DIGEST"
+
+      # Un secret non transmis par l'appelant est vide ici, sans erreur de GitHub.
+      - name: Secrets Azure présents
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          missing=()
+          for s in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do [ -n "${!s}" ] || missing+=("$s"); done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Secrets vides : ${missing[*]}. Les créer dans l'environnement « $ENVIRONMENT » ET les transmettre dans le bloc « secrets: » de l'appel (ex. AZURE_CLIENT_ID: \${{ secrets.AZURE_CLIENT_ID }})."
+            exit 1
+          fi
 
       - name: Azure login (OIDC, sans secret)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
