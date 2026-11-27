@@ -14,8 +14,8 @@ Dockerfile (DHI → distroless)   compose.yaml (app + PostgreSQL + Redis)   CI r
 
 | Fichier | Rôle | À copier vers |
 |---------|------|---------------|
-| `Dockerfile.go` | Go → binaire statique dans `distroless/static:nonroot` | `Dockerfile` |
-| `Dockerfile.node` | Node.js → runtime Node durci DHI, sans shell | `Dockerfile` |
+| `go.Dockerfile` | Go → binaire statique dans `distroless/static:nonroot` | `Dockerfile` |
+| `node.Dockerfile` | Node.js → runtime Node durci DHI, sans shell | `Dockerfile` |
 | `compose.yaml` | app + PostgreSQL + Redis durcis (base et cache supprimables) | `compose.yaml` |
 | `app.env.example` | variables du compose, sans secret | `app.env` |
 | `scripts/init-secrets.sh` | génère les secrets du compose dans `secrets/` | `scripts/` |
@@ -57,7 +57,7 @@ if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 
 ```sh
 T=chemin/vers/ContainerMaxxing/template
-cp $T/Dockerfile.go Dockerfile            # ou Dockerfile.node
+cp $T/go.Dockerfile Dockerfile            # ou node.Dockerfile
 cp $T/compose.yaml $T/.dockerignore $T/.trivyignore $T/.dockleignore .
 cp $T/app.env.example app.env
 mkdir -p scripts .github/workflows && cp $T/scripts/*.sh scripts/ && cp $T/.github/workflows/ci.yml .github/workflows/
